@@ -682,6 +682,8 @@ build-codegen/
 !glue/rexglue-sdk-main/gta4-recomp/tools/derive_frontend_advanced_menu_layout.py
 !glue/rexglue-sdk-main/gta4-recomp/tools/verify_gta4_keyboard_consumers.py
 !tools/analyze_native_memory.py
+!tools/inspect_xex.py
+!tools/test_inspect_xex.py
 !tools/analyze_native_pass_graph.py
 !tools/analyze_frame_stage_trace.py
 !tools/test_analyze_native_memory.py

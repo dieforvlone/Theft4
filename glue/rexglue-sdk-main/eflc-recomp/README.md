@@ -45,9 +45,20 @@ eflc-recomp/
    patched executable the same way `gta4-recomp/assets/default_v8.xex` was made
    (base XEX with its XEXP applied), and save it as
    `eflc-recomp/assets/default_eflc.xex`.
-3. Record the disc's media ID, the base XEX SHA-256, the patch SHA-256 and the
-   final version in `src/eflc_identity.h`. `src/install/gta4_source_inspector.cpp`
-   shows how the GTA IV values are read from the XEX headers.
+3. Identify the files with `tools/inspect_xex.py` (Python 3, no extra
+   packages; it only reads headers):
+
+   ```sh
+   python3 tools/inspect_xex.py path/to/default.xex path/to/default.xexp
+   ```
+
+   It prints the title ID, media ID and versions, says whether each patch is
+   built for that exact executable (the installer's signature-binding check),
+   flags GTA IV's own executable and TU8 so they aren't mistaken for EFLC's,
+   and prints the values to paste into `src/eflc_identity.h`. Pass several
+   `.xexp` files at once if the shared `545407F2` update folder holds more
+   than one. A patch still inside a title-update package must be extracted to
+   a loose `default.xexp` first, for example with Velocity.
 
 Never commit the executable, the patch, generated code or game data.
 
