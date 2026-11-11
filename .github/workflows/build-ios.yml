@@ -28,7 +28,7 @@ jobs:
   ipa:
     name: Unsigned iOS IPA
     # The newest Xcode 26 or later installed on the image is selected below.
-    runs-on: macos-27
+    runs-on: xcode-27
     timeout-minutes: 330
 
     steps:
