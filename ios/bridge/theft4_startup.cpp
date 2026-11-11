@@ -145,6 +145,17 @@ int theft4_start_game(const char* game_directory, const char* support_directory,
                 trace && std::strcmp(trace, "1") == 0)
                 REXCVAR_SET(gta4_trace_aspect, true);
 #endif
+        } else {
+            // Normal icon launches keep a small warnings-only log (bounded by
+            // the rotating file sink) so a crash report can be paired with the
+            // guest files that failed to open, e.g. while loading an episode.
+            const std::string log_path = (support / "runtime.log").string();
+            rex::LogConfig logging;
+            logging.log_file = log_path.c_str();
+            logging.default_level = spdlog::level::warn;
+            logging.flush_level = spdlog::level::warn;
+            rex::InitLogging(logging);
+            REXLOG_WARN("Theft4 retail launch: warnings-only runtime log");
         }
         if (const char* flight = std::getenv("THEFT4_GPU_FLIGHT_TRACE");
             flight && std::string_view(flight) == "1") {
