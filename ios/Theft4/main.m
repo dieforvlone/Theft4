@@ -1716,17 +1716,15 @@ static void bootEvent(void *context, const char *event) {
     });
 }
 
-static NSString *Theft4EpisodeNames(unsigned mask) {
 #ifdef THEFT4_HAS_GAME_LOADER
+static NSString *Theft4EpisodeNames(unsigned mask) {
     const unsigned both = THEFT4_EPISODE_TLAD | THEFT4_EPISODE_TBOGT;
     if ((mask & both) == both) return @"The Lost and Damned and The Ballad of Gay Tony";
     if (mask & THEFT4_EPISODE_TLAD) return @"The Lost and Damned";
     if (mask & THEFT4_EPISODE_TBOGT) return @"The Ballad of Gay Tony";
-#else
-    (void)mask;
-#endif
     return nil;
 }
+#endif
 
 - (void)refreshEpisodeStatus {
 #ifdef THEFT4_HAS_GAME_LOADER
@@ -1761,7 +1759,7 @@ static void Theft4EpisodeProgress(void *context, unsigned long long copied,
                      detail:@"Quit and reopen Theft4 before installing episodes."];
         return;
     }
-    if (!_setupValidated) {
+    if (![self hasInstalledBaseAndUpdate]) {
         [self showSaveMessage:@"FINISH GTA IV SETUP FIRST"
                      detail:@"Install and verify GTA IV and Title Update 8 before adding episodes."];
         return;

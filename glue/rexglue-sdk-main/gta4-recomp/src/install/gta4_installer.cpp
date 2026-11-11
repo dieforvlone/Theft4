@@ -993,7 +993,12 @@ EpisodeInstallResult InstallEpisodesFromSource(const std::filesystem::path& game
                                                const std::filesystem::path& source,
                                                Progress& progress) {
   EpisodeInstallResult result;
-  const auto staging_root = marketplace_root / ".episode-staging";
+  // The runtime enumerates every directory in marketplace_root as a content
+  // package, hidden ones included. Keep staging and backups beside it (same
+  // volume, so publication is still a rename) so an interrupted install can
+  // never leave a half-copied folder that the game treats as an episode.
+  const auto work_root = marketplace_root.parent_path();
+  const auto staging_root = work_root / ".episode-staging";
   try {
     if (source.empty()) {
       result.error = "No episode source was selected.";
@@ -1074,7 +1079,7 @@ EpisodeInstallResult InstallEpisodesFromSource(const std::filesystem::path& game
         return fail(std::string(directory) + " did not produce a complete episode layout.");
       }
       publish.push_back({staged_episode, marketplace_root / directory,
-                         marketplace_root / (std::string(".") + directory + "-backup")});
+                         work_root / (std::string(".episode-") + directory + "-backup")});
     }
     if (!PublishDirectories(publish, result.error)) {
       return fail(std::move(result.error));

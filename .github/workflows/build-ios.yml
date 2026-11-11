@@ -11,6 +11,7 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
+      - '.github/workflows/runner-check.yml'
   workflow_dispatch:
 
 permissions:
@@ -31,17 +32,18 @@ jobs:
   ipa:
     name: Unsigned iOS IPA
     # macos-26 and macos-27 jobs were never picked up by a hosted runner;
-    # macos-15 was acquired immediately. The iOS 26 SDK comes from the newest
-    # Xcode 26 or later installed on the image, selected below.
+    # macos-15 was acquired. Its image provides Xcode 26.x (selected below).
     runs-on: macos-15
-    timeout-minutes: 300
+    timeout-minutes: 330
 
     steps:
+      # tools/setup_repo.py initializes every pinned submodule (shallow) and
+      # applies the reviewed dependency patches, so the checkout itself does
+      # not fetch submodules a second time.
       - name: Checkout
         uses: actions/checkout@v4
         with:
           path: Theft4
-          submodules: recursive
           fetch-depth: 1
           persist-credentials: false
 
@@ -50,12 +52,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Select Xcode and install build tools
+      - name: Select Xcode 26 or newer
         run: |
           set -euo pipefail
           ls -d /Applications/Xcode*.app || true
           # Theft4 targets iOS 26.0, which needs Xcode 26 or newer.
-          xcode="$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          xcode="$(find /Applications -maxdepth 1 -name 'Xcode_2[6-9]*.app' | sort -V | tail -n 1)"
           if [[ -z "$xcode" ]]; then
             version="$(/usr/bin/xcodebuild -version 2>/dev/null | head -n 1 | awk '{print $2}')"
             if [[ "${version%%.*}" -ge 26 ]]; then
@@ -68,18 +70,54 @@ jobs:
           echo "Using $xcode"
           sudo xcode-select -s "$xcode/Contents/Developer"
           echo "DEVELOPER_DIR=$xcode/Contents/Developer" >> "$GITHUB_ENV"
-          brew install cmake ninja
           sw_vers
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
-          cmake --version
+
+      - name: Free disk space
+        run: |
           df -h "$GITHUB_WORKSPACE"
+          # Older Xcode releases are unused by this build and take tens of GB.
+          for app in /Applications/Xcode_1[0-6]*.app; do
+            if [[ -d "$app" ]]; then sudo rm -rf "$app"; fi
+          done
+          df -h "$GITHUB_WORKSPACE"
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          brew install cmake || brew upgrade cmake || true
+          cmake --version
+          python3 - <<'PY'
+          import re, subprocess
+          version = subprocess.run(['cmake', '--version'], capture_output=True, text=True).stdout
+          major, minor = map(int, re.search(r'(\d+)\.(\d+)', version).groups())
+          if (major, minor) < (3, 29):
+              raise SystemExit(f'CMake 3.29 or newer is required, found {major}.{minor}')
+          PY
 
       - name: Prepare pinned dependencies and patches
         working-directory: Theft4
         run: |
-          python3 tools/setup_repo.py
+          set -euo pipefail
+          python3 tools/setup_repo.py --jobs 6
           python3 tools/setup_repo.py --check
+          df -h "$GITHUB_WORKSPACE"
+
+      # Quick source-level checks that compile parts of the iOS launcher with
+      # Xcode. They run before the long build so a launcher error shows up in
+      # minutes; they report without blocking the build.
+      - name: Quick iOS source checks
+        working-directory: Theft4
+        continue-on-error: true
+        run: |
+          status=0
+          for test in tests/ios/test_*.py; do
+            echo "::group::$test"
+            python3 "$test" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
 
       # ------------------------------------------------------------------
       # MoltenVK / SPIRV iPhoneOS archives from XeniOS (cached by commit)
@@ -88,10 +126,8 @@ jobs:
         id: xenios-cache
         uses: actions/cache@v4
         with:
-          path: |
-            XeniOS/build-ios-xcode/obj/iOS/Release
-            XeniOS/build-ios-xcode/generated
-          key: xenios-ios-${{ env.XENIOS_COMMIT }}-v1
+          path: XeniOS/build-ios-xcode/obj/iOS/Release
+          key: xenios-ios-libs-${{ env.XENIOS_COMMIT }}-v2
 
       - name: Fetch XeniOS
         if: steps.xenios-cache.outputs.cache-hit != 'true'
@@ -102,17 +138,17 @@ jobs:
           git remote add origin "$XENIOS_REPOSITORY"
           git fetch -q --depth 1 origin "$XENIOS_COMMIT"
           git checkout -q FETCH_HEAD
-          git submodule update --init --recursive --depth 1 --jobs 4
+          git submodule update --init --recursive --depth 1 --jobs 6
 
       - name: Build XeniOS iOS libraries
         if: steps.xenios-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
+          # XeniOS configures MoltenVK and SPIRV-Cross for every Apple target.
           cmake -S XeniOS -B XeniOS/build-ios-xcode -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DXENIA_ENABLE_IOS_MOLTENVK=ON
+            -DCMAKE_OSX_ARCHITECTURES=arm64
           cmake --build XeniOS/build-ios-xcode --config Release \
             --target MoltenVK MoltenVK_Common MoltenVK_ShaderConverter \
                      spirv-cross SPIRV-Tools-static --parallel 3
@@ -124,10 +160,17 @@ jobs:
           lib_dir="$GITHUB_WORKSPACE/XeniOS/build-ios-xcode/obj/iOS/Release"
           for library in libMoltenVK.a libMoltenVK_ShaderConverter.a libMoltenVK_Common.a \
                          libspirv-cross.a libSPIRV-Tools.a; do
-            test -f "$lib_dir/$library" || { echo "::error::Missing $lib_dir/$library"; \
-              find "$GITHUB_WORKSPACE/XeniOS/build-ios-xcode" -name '*.a' | head -50; exit 1; }
+            if [[ ! -f "$lib_dir/$library" ]]; then
+              echo "::error::Missing $lib_dir/$library"
+              find "$GITHUB_WORKSPACE/XeniOS" -name '*.a' | head -50
+              exit 1
+            fi
           done
           echo "THEFT4_MOLTENVK_IOS_LIB_DIR=$lib_dir" >> "$GITHUB_ENV"
+          # Only the archives are needed from here on; reclaim the sources.
+          find "$GITHUB_WORKSPACE/XeniOS" -mindepth 1 -maxdepth 1 ! -name build-ios-xcode -exec rm -rf {} +
+          find "$GITHUB_WORKSPACE/XeniOS/build-ios-xcode" -mindepth 1 -maxdepth 1 ! -name obj -exec rm -rf {} +
+          df -h "$GITHUB_WORKSPACE"
 
       # ------------------------------------------------------------------
       # Offline Metal shader libraries (from the shader corpus in the repo)
@@ -135,6 +178,7 @@ jobs:
       - name: Build Metal shader exporters
         working-directory: Theft4
         run: |
+          set -euo pipefail
           cmake -S tools/direct-metal -B out/direct-metal/build -DCMAKE_BUILD_TYPE=Release
           cmake --build out/direct-metal/build --target metal_shader_export metal_host_shader_export --parallel 3
 
@@ -148,8 +192,11 @@ jobs:
           python3 tools/direct-metal/compile_shaders.py out/direct-metal/host-corpus out/direct-metal/ios/Host --platform ios
           test -f out/direct-metal/ios/manifest.tsv
           test -f out/direct-metal/ios/Host/HOST_SHADER_MANIFEST.json
+          # The exporter build tree is no longer needed.
+          rm -rf out/direct-metal/build
           echo "THEFT4_METAL_LIBRARIES=$PWD/out/direct-metal/ios" >> "$GITHUB_ENV"
           echo "THEFT4_METAL_HOST_LIBRARIES=$PWD/out/direct-metal/ios/Host" >> "$GITHUB_ENV"
+          df -h "$GITHUB_WORKSPACE"
 
       # ------------------------------------------------------------------
       # Theft4 app and unsigned IPA
@@ -158,9 +205,7 @@ jobs:
         working-directory: Theft4
         env:
           THEFT4_BUILD_JOBS: 3
-        run: |
-          df -h "$GITHUB_WORKSPACE"
-          ./tools/build_ios_release.sh
+        run: ./tools/build_ios_release.sh
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
