@@ -673,6 +673,16 @@ int theft4_start_game(const char* game_directory, const char* support_directory,
         for (const char* episode : {"DLC1", "DLC2"})
             runtime.file_system()->RegisterSymbolicLink(std::string(episode) + "\\",
                                                         std::string("game:\\") + episode + "\\");
+        // The episode shader declarations are requested as
+        // shaders\<name>dcl\<name>dcl\<name>.dcl, while the title update keeps
+        // them in shaders\dcl\<name>.dcl. Point the malformed directory at the
+        // real one for the three episode shaders the update ships.
+        for (const char* shader : {"rage_postfx_e1", "rage_postfx_e2", "water_e2"}) {
+            const std::string doubled = std::string(shader) + "dcl\\" + shader + "dcl\\";
+            for (const char* root : {"update:\\shaders\\", "game:\\update\\shaders\\"})
+                runtime.file_system()->RegisterSymbolicLink(std::string(root) + doubled,
+                                                            std::string(root) + "dcl\\");
+        }
         if (const char* modDirectory = std::getenv("THEFT4_MOD_TIMECYCLE_DIRECTORY");
             modDirectory && *modDirectory) {
             event(context, "Preparing Custom Time Cycle by SBerrix; original game files preserved");
