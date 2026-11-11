@@ -31,9 +31,8 @@ env:
 jobs:
   ipa:
     name: Unsigned iOS IPA
-    # macos-26 and macos-27 jobs were never picked up by a hosted runner;
-    # macos-15 was acquired. Its image provides Xcode 26.x (selected below).
-    runs-on: macos-15
+    # The newest Xcode 26 or later installed on the image is selected below.
+    runs-on: macos-26
     timeout-minutes: 330
 
     steps:
