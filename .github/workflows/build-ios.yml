@@ -1,0 +1,159 @@
+name: iOS Build
+
+# Builds the unsigned, sideload-ready Theft4 IPA the same way as
+# tools/build_ios_release.sh (see docs/IOS_RELEASE_BUILD.md). The resulting
+# IPA contains no game data and must be re-signed by the user's sideloading
+# tool. Download it from the run's "Artifacts" section.
+
+on:
+  push:
+    branches: ['claude/**']
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CLICOLOR_FORCE: 1
+  # XeniOS supplies the iPhoneOS MoltenVK/SPIRV archives (docs/IOS_GAME_STARTUP.md).
+  # Pinned so every run builds the same dependency.
+  XENIOS_REPOSITORY: https://github.com/xenios-jp/XeniOS.git
+  XENIOS_COMMIT: cf7c7ee452314913124d205e41e325b33891aacb
+
+jobs:
+  ipa:
+    name: Unsigned iOS IPA
+    runs-on: macos-26
+    timeout-minutes: 300
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: Theft4
+          submodules: recursive
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Select Xcode and install build tools
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          brew install cmake ninja
+          sw_vers
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          cmake --version
+          df -h "$GITHUB_WORKSPACE"
+
+      - name: Prepare pinned dependencies and patches
+        working-directory: Theft4
+        run: |
+          python3 tools/setup_repo.py
+          python3 tools/setup_repo.py --check
+
+      # ------------------------------------------------------------------
+      # MoltenVK / SPIRV iPhoneOS archives from XeniOS (cached by commit)
+      # ------------------------------------------------------------------
+      - name: Restore XeniOS iOS libraries
+        id: xenios-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            XeniOS/build-ios-xcode/obj/iOS/Release
+            XeniOS/build-ios-xcode/generated
+          key: xenios-ios-${{ env.XENIOS_COMMIT }}-v1
+
+      - name: Fetch XeniOS
+        if: steps.xenios-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git init -q XeniOS
+          cd XeniOS
+          git remote add origin "$XENIOS_REPOSITORY"
+          git fetch -q --depth 1 origin "$XENIOS_COMMIT"
+          git checkout -q FETCH_HEAD
+          git submodule update --init --recursive --depth 1 --jobs 4
+
+      - name: Build XeniOS iOS libraries
+        if: steps.xenios-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          cmake -S XeniOS -B XeniOS/build-ios-xcode -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DXENIA_ENABLE_IOS_MOLTENVK=ON
+          cmake --build XeniOS/build-ios-xcode --config Release \
+            --target MoltenVK MoltenVK_Common MoltenVK_ShaderConverter \
+                     spirv-cross SPIRV-Tools-static --parallel 3
+          ls -la XeniOS/build-ios-xcode/obj/iOS/Release
+
+      - name: Check XeniOS iOS libraries
+        run: |
+          set -euo pipefail
+          lib_dir="$GITHUB_WORKSPACE/XeniOS/build-ios-xcode/obj/iOS/Release"
+          for library in libMoltenVK.a libMoltenVK_ShaderConverter.a libMoltenVK_Common.a \
+                         libspirv-cross.a libSPIRV-Tools.a; do
+            test -f "$lib_dir/$library" || { echo "::error::Missing $lib_dir/$library"; \
+              find "$GITHUB_WORKSPACE/XeniOS/build-ios-xcode" -name '*.a' | head -50; exit 1; }
+          done
+          echo "THEFT4_MOLTENVK_IOS_LIB_DIR=$lib_dir" >> "$GITHUB_ENV"
+
+      # ------------------------------------------------------------------
+      # Offline Metal shader libraries (from the shader corpus in the repo)
+      # ------------------------------------------------------------------
+      - name: Build Metal shader exporters
+        working-directory: Theft4
+        run: |
+          cmake -S tools/direct-metal -B out/direct-metal/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build out/direct-metal/build --target metal_shader_export metal_host_shader_export --parallel 3
+
+      - name: Export and compile Metal shaders for iOS
+        working-directory: Theft4
+        run: |
+          set -euo pipefail
+          out/direct-metal/build/metal_shader_export out/direct-metal/corpus
+          out/direct-metal/build/metal_host_shader_export out/direct-metal/host-corpus
+          python3 tools/direct-metal/compile_shaders.py out/direct-metal/corpus out/direct-metal/ios --platform ios
+          python3 tools/direct-metal/compile_shaders.py out/direct-metal/host-corpus out/direct-metal/ios/Host --platform ios
+          test -f out/direct-metal/ios/manifest.tsv
+          test -f out/direct-metal/ios/Host/HOST_SHADER_MANIFEST.json
+          echo "THEFT4_METAL_LIBRARIES=$PWD/out/direct-metal/ios" >> "$GITHUB_ENV"
+          echo "THEFT4_METAL_HOST_LIBRARIES=$PWD/out/direct-metal/ios/Host" >> "$GITHUB_ENV"
+
+      # ------------------------------------------------------------------
+      # Theft4 app and unsigned IPA
+      # ------------------------------------------------------------------
+      - name: Build Theft4 and package the unsigned IPA
+        working-directory: Theft4
+        env:
+          THEFT4_BUILD_JOBS: 3
+        run: |
+          df -h "$GITHUB_WORKSPACE"
+          ./tools/build_ios_release.sh
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Theft4-ios-unsigned-${{ github.sha }}
+          path: |
+            Theft4/dist/*.ipa
+            Theft4/dist/*.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Disk usage on failure
+        if: failure()
+        run: df -h "$GITHUB_WORKSPACE"
