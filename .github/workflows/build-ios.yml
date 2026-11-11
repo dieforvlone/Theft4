@@ -23,10 +23,6 @@ concurrency:
 
 env:
   CLICOLOR_FORCE: 1
-  # XeniOS supplies the iPhoneOS MoltenVK/SPIRV archives (docs/IOS_GAME_STARTUP.md).
-  # Pinned so every run builds the same dependency.
-  XENIOS_REPOSITORY: https://github.com/xenios-jp/XeniOS.git
-  XENIOS_COMMIT: cf7c7ee452314913124d205e41e325b33891aacb
 
 jobs:
   ipa:
@@ -119,57 +115,59 @@ jobs:
           exit $status
 
       # ------------------------------------------------------------------
-      # MoltenVK / SPIRV iPhoneOS archives from XeniOS (cached by commit)
+      # MoltenVK / SPIRV iPhoneOS archives (tools/ios-moltenvk), built from
+      # the workspace's pinned, patched sources and cached by their revisions
       # ------------------------------------------------------------------
-      - name: Restore XeniOS iOS libraries
-        id: xenios-cache
+      - name: Compute MoltenVK archive cache key
+        id: mvk-key
+        working-directory: Theft4
+        run: |
+          set -euo pipefail
+          revisions="$(git ls-tree HEAD thirdparty/MoltenVK/MoltenVK thirdparty/MoltenVK/SPIRV-Cross \
+            glue/rexglue-sdk-main/thirdparty/spirv-tools glue/rexglue-sdk-main/thirdparty/spirv-headers \
+            thirdparty/plume | awk '{print $3}' | tr '\n' '-')"
+          files="$(shasum -a 256 tools/ios-moltenvk/CMakeLists.txt cmake/dependency-patches/moltenvk.patch | awk '{print $1}' | tr '\n' '-')"
+          xcode="$(xcodebuild -version | tr -d '\n ')"
+          key="ios-moltenvk-$(printf '%s' "$revisions$files$xcode" | shasum -a 256 | cut -c1-24)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "$key"
+
+      - name: Restore MoltenVK archives
+        id: mvk-cache
         uses: actions/cache@v4
         with:
-          path: XeniOS/build-ios-xcode/obj/iOS/Release
-          key: xenios-ios-libs-${{ env.XENIOS_COMMIT }}-v2
+          path: Theft4/out/ios-moltenvk/lib
+          key: ${{ steps.mvk-key.outputs.key }}
 
-      - name: Fetch XeniOS
-        if: steps.xenios-cache.outputs.cache-hit != 'true'
+      - name: Build MoltenVK archives for iPhoneOS
+        if: steps.mvk-cache.outputs.cache-hit != 'true'
+        working-directory: Theft4
         run: |
           set -euo pipefail
-          git init -q XeniOS
-          cd XeniOS
-          git remote add origin "$XENIOS_REPOSITORY"
-          git fetch -q --depth 1 origin "$XENIOS_COMMIT"
-          git checkout -q FETCH_HEAD
-          git submodule update --init --recursive --depth 1 --jobs 6
-
-      - name: Build XeniOS iOS libraries
-        if: steps.xenios-cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          # XeniOS configures MoltenVK and SPIRV-Cross for every Apple target.
-          cmake -S XeniOS -B XeniOS/build-ios-xcode -G Xcode \
+          cmake -S tools/ios-moltenvk -B out/ios-moltenvk -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_OSX_ARCHITECTURES=arm64
-          cmake --build XeniOS/build-ios-xcode --config Release \
-            --target MoltenVK MoltenVK_Common MoltenVK_ShaderConverter \
-                     spirv-cross SPIRV-Tools-static --parallel 3
-          ls -la XeniOS/build-ios-xcode/obj/iOS/Release
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+          cmake --build out/ios-moltenvk --config Release --target theft4_ios_moltenvk --parallel 3
 
-      - name: Check XeniOS iOS libraries
+      - name: Check MoltenVK archives
+        working-directory: Theft4
         run: |
           set -euo pipefail
-          lib_dir="$GITHUB_WORKSPACE/XeniOS/build-ios-xcode/obj/iOS/Release"
+          lib_dir="$PWD/out/ios-moltenvk/lib"
           for library in libMoltenVK.a libMoltenVK_ShaderConverter.a libMoltenVK_Common.a \
                          libspirv-cross.a libSPIRV-Tools.a; do
             if [[ ! -f "$lib_dir/$library" ]]; then
               echo "::error::Missing $lib_dir/$library"
-              find "$GITHUB_WORKSPACE/XeniOS" -name '*.a' | head -50
+              find out/ios-moltenvk -name '*.a' | head -50
               exit 1
             fi
+            # Device archives only: no simulator or macOS slices.
+            lipo -info "$lib_dir/$library"
           done
           echo "THEFT4_MOLTENVK_IOS_LIB_DIR=$lib_dir" >> "$GITHUB_ENV"
-          # Only the archives are needed from here on; reclaim the sources.
-          find "$GITHUB_WORKSPACE/XeniOS" -mindepth 1 -maxdepth 1 ! -name build-ios-xcode -exec rm -rf {} +
-          find "$GITHUB_WORKSPACE/XeniOS/build-ios-xcode" -mindepth 1 -maxdepth 1 ! -name obj -exec rm -rf {} +
-          df -h "$GITHUB_WORKSPACE"
 
       # ------------------------------------------------------------------
       # Offline Metal shader libraries (from the shader corpus in the repo)
