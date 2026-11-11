@@ -258,3 +258,24 @@ extern "C" void sub_82193D80(PPCContext& ctx, uint8_t* base) {
   rex::diagnostics::callers::Span sample(rex::diagnostics::callers::GuestFencePoll, uint32_t(ctx.lr));
   __imp__sub_82193D80(ctx, base);
 }
+
+// Name -> streaming-slot lookup (a binary search over name hashes). It returns
+// -1 for a name that no loaded image registered; some callers index a slot
+// table with the result unchecked. Record the first misses so a device log
+// shows which asset was absent, e.g. when episode content fails to register.
+extern "C" void sub_821CA340(PPCContext& ctx, uint8_t* base) {
+  static std::atomic<uint32_t> misses{0};
+  const uint32_t name_address = ctx.r3.u32;
+  const uint32_t caller = static_cast<uint32_t>(ctx.lr);
+  __imp__sub_821CA340(ctx, base);
+  if (ctx.r3.s32 != -1 || misses.fetch_add(1, std::memory_order_relaxed) >= 64) return;
+  char name[65] = {};
+  if (name_address != 0) {
+    for (size_t i = 0; i + 1 < sizeof(name); ++i) {
+      const char c = static_cast<char>(REX_LOAD_U8(name_address + i));
+      if (c == '\0') break;
+      name[i] = c;
+    }
+  }
+  REXLOG_WARN("GTA IV asset name not registered: '{}' (caller={:08X})", name, caller);
+}

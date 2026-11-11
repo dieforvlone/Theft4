@@ -12,6 +12,10 @@
 // Disable warnings about unused parameters for kernel functions
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
+#include <algorithm>
+#include <cctype>
+#include <string>
+
 #include <rex/diagnostics/runtime_probe.h>
 
 #include <rex/filesystem/device.h>
@@ -247,6 +251,15 @@ u32 NtCreateFile_entry(mapped_u32 handle_out, u32 desired_access,
     REXKRNL_IMPORT_FAIL("NtCreateFile", "path='{}' -> {:#x}", target_path, result);
   } else {
     REXKRNL_IMPORT_RESULT("NtCreateFile", "{:#x} handle={:#x}", result, handle);
+    // Archive and episode opens are few; record them at warning level so the
+    // warnings-only retail log shows which content images were registered.
+    std::string lower(target_path);
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lower.find("dlc") != std::string::npos || lower.ends_with(".img") ||
+        lower.ends_with(".rpf")) {
+      REXKRNL_WARN("[NtCreateFile] opened: path='{}'", target_path);
+    }
   }
   return result;
 }
