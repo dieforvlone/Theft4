@@ -155,7 +155,9 @@ int theft4_validate_installed_game(const char* game_directory, char* message,
 }
 
 int theft4_configure_boot_diagnostics(void) {
-    if (theft4_retail_mode()) return rex::diagnostics::Configure(false, "") ? 0 : 1;
+    // Retail keeps only the logging category, which theft4_startup limits to a
+    // bounded warnings-only file, so device crashes can be diagnosed.
+    if (theft4_retail_mode()) return rex::diagnostics::Configure(true, "logging") ? 0 : 1;
     const char* enabled = std::getenv("THEFT4_DIAGNOSTICS");
     const bool detailed = enabled && std::string_view(enabled) == "1";
     const char* content_probe = std::getenv("THEFT4_NATIVE_CONTENT_PROBE");
