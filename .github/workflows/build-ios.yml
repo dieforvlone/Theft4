@@ -30,10 +30,10 @@ env:
 jobs:
   ipa:
     name: Unsigned iOS IPA
-    # macos-26 jobs repeatedly went unacquired ("not acquired by Runner of type
-    # hosted"). The iOS 26 SDK comes from the newest Xcode 26 or later
-    # installed on the image, selected below.
-    runs-on: macos-27
+    # macos-26 and macos-27 jobs were never picked up by a hosted runner;
+    # macos-15 was acquired immediately. The iOS 26 SDK comes from the newest
+    # Xcode 26 or later installed on the image, selected below.
+    runs-on: macos-15
     timeout-minutes: 300
 
     steps:
