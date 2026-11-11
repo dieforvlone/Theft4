@@ -4,6 +4,9 @@ name: Runner check
 # acquire. Each job only prints the machine details.
 
 on:
+  push:
+    branches: ['claude/**']
+    paths: ['.github/workflows/runner-check.yml']
   workflow_dispatch:
 
 permissions:
