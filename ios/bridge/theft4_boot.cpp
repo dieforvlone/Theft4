@@ -8,6 +8,9 @@
 #include <rex/system/xex_module.h>
 #include <rex/runtime.h>
 #include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <thread>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -34,6 +37,77 @@ int theft4_install_title_update(const char* game_directory, const char* update_s
         WriteImportMessage(message, message_capacity,
             std::string("The title update could not be installed: ") + error.what());
         return 1;
+    }
+}
+
+// Must match the marketplace root passed to rex::Runtime by theft4_start_game
+// (theft4_startup.cpp): <support>/startup/marketplace.
+static std::filesystem::path EpisodeMarketplaceRoot(const char* support_directory) {
+    return std::filesystem::path(support_directory) / "startup" / "marketplace";
+}
+
+int theft4_install_episodes(const char* game_directory, const char* support_directory,
+                            const char* episode_source, theft4_progress_fn progress,
+                            void* context, unsigned* installed_mask,
+                            char* message, size_t message_capacity) {
+    if (installed_mask) *installed_mask = 0;
+    if (!game_directory || !support_directory || !episode_source) {
+        WriteImportMessage(message, message_capacity, "No episode source was selected.");
+        return 2;
+    }
+    try {
+        const auto marketplace = EpisodeMarketplaceRoot(support_directory);
+        std::filesystem::create_directories(marketplace);
+        gta4::install::Progress install_progress;
+        std::jthread reporter;
+        if (progress) {
+            reporter = std::jthread([&](std::stop_token stop) {
+                while (!stop.stop_requested()) {
+                    progress(context, install_progress.copied_bytes.load(),
+                             install_progress.total_bytes.load());
+                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                }
+            });
+        }
+        const auto result = gta4::install::InstallEpisodesFromSource(
+            game_directory, marketplace, episode_source, install_progress);
+        if (reporter.joinable()) {
+            reporter.request_stop();
+            reporter.join();
+        }
+        if (!result.success) {
+            WriteImportMessage(message, message_capacity, result.error);
+            return 1;
+        }
+        unsigned mask = 0;
+        if (result.installed_tlad) mask |= THEFT4_EPISODE_TLAD;
+        if (result.installed_tbogt) mask |= THEFT4_EPISODE_TBOGT;
+        if (installed_mask) *installed_mask = mask;
+        std::string installed = mask == (THEFT4_EPISODE_TLAD | THEFT4_EPISODE_TBOGT)
+            ? "The Lost and Damned and The Ballad of Gay Tony"
+            : (mask & THEFT4_EPISODE_TLAD ? "The Lost and Damned" : "The Ballad of Gay Tony");
+        WriteImportMessage(message, message_capacity, "Installed " + installed + ".");
+        REXLOG_INFO("Episode install from '{}' completed: mask={}", episode_source, mask);
+        return 0;
+    } catch (const std::exception& error) {
+        WriteImportMessage(message, message_capacity,
+            std::string("The episodes could not be installed: ") + error.what());
+        return 1;
+    }
+}
+
+unsigned theft4_installed_episodes(const char* support_directory) {
+    if (!support_directory) return 0;
+    try {
+        const auto marketplace = EpisodeMarketplaceRoot(support_directory);
+        unsigned mask = 0;
+        if (gta4::install::IsEpisodeReady(marketplace, gta4::install::Episode::kTlad))
+            mask |= THEFT4_EPISODE_TLAD;
+        if (gta4::install::IsEpisodeReady(marketplace, gta4::install::Episode::kTbogt))
+            mask |= THEFT4_EPISODE_TBOGT;
+        return mask;
+    } catch (const std::exception&) {
+        return 0;
     }
 }
 

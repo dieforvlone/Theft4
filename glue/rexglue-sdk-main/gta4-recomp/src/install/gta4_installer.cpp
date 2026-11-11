@@ -988,6 +988,114 @@ bool IsEpisodeReady(const std::filesystem::path& marketplace_root, Episode episo
   return ValidateStagedEpisode(marketplace_root / EpisodeDirectory(episode), episode);
 }
 
+EpisodeInstallResult InstallEpisodesFromSource(const std::filesystem::path& game_root,
+                                               const std::filesystem::path& marketplace_root,
+                                               const std::filesystem::path& source,
+                                               Progress& progress) {
+  EpisodeInstallResult result;
+  const auto staging_root = marketplace_root / ".episode-staging";
+  try {
+    if (source.empty()) {
+      result.error = "No episode source was selected.";
+      return result;
+    }
+    if (!IsInstallReady(game_root, &result.error)) {
+      result.error = "Install GTA IV and Title Update 8 before adding episodes: " + result.error;
+      return result;
+    }
+
+    auto mounted = MountSource(source, result.error);
+    if (!mounted) {
+      return result;
+    }
+    // The standalone Episodes from Liberty City disc shares GTA IV's title ID.
+    if (mounted->package_title_id && *mounted->package_title_id != kGta4TitleId) {
+      result.error = "The selected source belongs to a different game.";
+      return result;
+    }
+
+    struct FoundEpisode {
+      Episode episode;
+      rex::filesystem::Entry* payload_root;
+    };
+    std::vector<FoundEpisode> found;
+    for (Episode episode : {Episode::kTlad, Episode::kTbogt}) {
+      if (auto* payload_root = FindDlcPayloadRoot(mounted->root, episode)) {
+        found.push_back({episode, payload_root});
+      }
+    }
+    if (found.empty()) {
+      result.error =
+          "No episode was found. Each episode folder must contain setup2.xml, content.dat "
+          "and e1_audio.xml (The Lost and Damned) or e2_audio.xml (The Ballad of Gay Tony).";
+      return result;
+    }
+
+    uint64_t total = 0;
+    for (const auto& episode : found) {
+      if (!TreeSize(episode.payload_root, total, result.error)) {
+        return result;
+      }
+    }
+    progress.copied_bytes = 0;
+    progress.total_bytes = total;
+
+    std::error_code fs_error;
+    std::filesystem::remove_all(staging_root, fs_error);
+    fs_error.clear();
+    std::filesystem::create_directories(staging_root, fs_error);
+    if (fs_error) {
+      result.error = "Could not create the episode staging directory: " + fs_error.message();
+      return result;
+    }
+    const auto available_space = std::filesystem::space(staging_root, fs_error);
+    if (fs_error || available_space.available < total) {
+      result.error = fs_error ? "Could not determine available space: " + fs_error.message()
+                              : "There is not enough free space to install the episodes.";
+      std::filesystem::remove_all(staging_root, fs_error);
+      return result;
+    }
+
+    auto fail = [&](std::string error) {
+      std::error_code cleanup_error;
+      std::filesystem::remove_all(staging_root, cleanup_error);
+      result.error = std::move(error);
+      return result;
+    };
+
+    std::vector<PublishItem> publish;
+    for (const auto& episode : found) {
+      const auto directory = EpisodeDirectory(episode.episode);
+      const auto staged_episode = staging_root / directory;
+      if (!CopyTree(episode.payload_root, staged_episode, progress, result.error)) {
+        return fail(std::move(result.error));
+      }
+      if (!ValidateStagedEpisode(staged_episode, episode.episode)) {
+        return fail(std::string(directory) + " did not produce a complete episode layout.");
+      }
+      publish.push_back({staged_episode, marketplace_root / directory,
+                         marketplace_root / (std::string(".") + directory + "-backup")});
+    }
+    if (!PublishDirectories(publish, result.error)) {
+      return fail(std::move(result.error));
+    }
+    std::filesystem::remove_all(staging_root, fs_error);
+
+    for (const auto& episode : found) {
+      (episode.episode == Episode::kTlad ? result.installed_tlad : result.installed_tbogt) = true;
+    }
+    result.success = true;
+    return result;
+  } catch (const std::exception& exception) {
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(staging_root, cleanup_error);
+    result.success = false;
+    result.error = "The selected source changed or could not be read during installation: " +
+                   std::string(exception.what());
+    return result;
+  }
+}
+
 Result VerifyInstall(const std::filesystem::path& game_root,
                      const std::filesystem::path& marketplace_root) {
   Result result;

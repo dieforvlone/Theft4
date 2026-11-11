@@ -15,6 +15,24 @@ int theft4_configure_boot_diagnostics(void);
 int theft4_install_title_update(const char* game_directory, const char* update_source,
                                 char* message, size_t message_capacity);
 
+// Episodes from Liberty City. The source may be an EFLC disc image (.iso),
+// an Xbox content package, or an extracted folder; it is searched for The Lost
+// and Damned and The Ballad of Gay Tony and every episode found is installed
+// into the game's marketplace folder below support_directory. Requires a
+// launch-ready base game. progress (optional) is called on a helper thread
+// with copied/total bytes. Call on a background queue. Returns zero on success;
+// installed_mask receives THEFT4_EPISODE_* bits for the episodes installed.
+#define THEFT4_EPISODE_TLAD 1u
+#define THEFT4_EPISODE_TBOGT 2u
+typedef void (*theft4_progress_fn)(void* context, unsigned long long copied,
+                                   unsigned long long total);
+int theft4_install_episodes(const char* game_directory, const char* support_directory,
+                            const char* episode_source, theft4_progress_fn progress,
+                            void* context, unsigned* installed_mask,
+                            char* message, size_t message_capacity);
+// THEFT4_EPISODE_* bits for the episodes that are installed and complete.
+unsigned theft4_installed_episodes(const char* support_directory);
+
 // Validates a transferred extracted base game before the app lets the user
 // select a title update. This only reads the selected directory.
 int theft4_validate_base_game(const char* game_directory, char* message,
