@@ -33,8 +33,6 @@ if(REXGLUE_HEADLESS_KERNEL AND NOT (REXGLUE_CORE_ONLY AND REXGLUE_RUNTIME_ONLY))
     message(FATAL_ERROR "REXGLUE_HEADLESS_KERNEL requires CORE_ONLY and RUNTIME_ONLY")
 endif()
 option(REXGLUE_BUILD_GTA4_RECOMP "Build the bundled GTA IV recomp application" OFF)
-option(REXGLUE_BUILD_EFLC_RECOMP
-    "Build the separate Episodes from Liberty City recomp application" OFF)
 option(REXGLUE_ENABLE_SANITIZERS "Enable UndefinedBehaviorSanitizer" OFF)
 option(REXGLUE_ENABLE_FIDELITYFX "Enable optional AMD FidelityFX integration (experimental)" OFF)
 option(REXGLUE_ENABLE_TRACY                "Enable Tracy profiler integration" ON)
@@ -316,16 +314,6 @@ if(REXGLUE_BUILD_GTA4_RECOMP)
     set(REXGLUE_SHARE_DIR "${REXGLUE_ROOT}/src/ui")
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rexglue_helpers.cmake)
     add_subdirectory(gta4-recomp)
-endif()
-
-# Episodes from Liberty City is a separate application built from the user's
-# own EFLC executable. It is configured only when its generated code exists.
-if(REXGLUE_BUILD_EFLC_RECOMP)
-    if(NOT REXGLUE_BUILD_GTA4_RECOMP)
-        set(REXGLUE_SHARE_DIR "${REXGLUE_ROOT}/src/ui")
-        include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rexglue_helpers.cmake)
-    endif()
-    add_subdirectory(eflc-recomp)
 endif()
 
 # Add tests subdirectory if tests are enabled
