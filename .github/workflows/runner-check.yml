@@ -1,0 +1,24 @@
+name: Runner check
+
+# Diagnostic: confirms which GitHub-hosted runner types this repository can
+# acquire. Each job only prints the machine details.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hello:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - run: |
+          uname -a
+          if [ "$(uname -s)" = Darwin ]; then sw_vers; ls -d /Applications/Xcode*.app; fi
