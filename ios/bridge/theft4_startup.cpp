@@ -665,6 +665,14 @@ int theft4_start_game(const char* game_directory, const char* support_directory,
 #endif
         if (runtime.Setup(PPCImageConfig, std::move(config)) != 0)
             throw std::runtime_error("Xbox/AOT runtime setup failed");
+        // Episode discovery opens each episode archive with a device-less
+        // path ("DLC1\DLC.rpf"), which the VFS cannot place on any device.
+        // On the console it resolves against the title's game root, where
+        // the disc layout keeps DLC1/DLC2, so link both names to game:. The
+        // trailing separator keeps content devices such as "dlc1:" unaffected.
+        for (const char* episode : {"DLC1", "DLC2"})
+            runtime.file_system()->RegisterSymbolicLink(std::string(episode) + "\\",
+                                                        std::string("game:\\") + episode + "\\");
         if (const char* modDirectory = std::getenv("THEFT4_MOD_TIMECYCLE_DIRECTORY");
             modDirectory && *modDirectory) {
             event(context, "Preparing Custom Time Cycle by SBerrix; original game files preserved");
