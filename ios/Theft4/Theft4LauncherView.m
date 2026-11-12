@@ -794,8 +794,22 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     if (phone) {
         CGFloat barHeight = portraitMenu ? 56 : 48;
         _navigationScroll.frame = CGRectMake(8, 6, pw - 16, barHeight);
-        _navigation.frame = CGRectMake(0, 0, pw - 16, barHeight);
+        // Equal-width tabs fill the bar when they fit. On narrow screens (for
+        // example a folded device's cover display) widen the row to the widest
+        // tab's natural width and let the bar scroll sideways instead of
+        // clipping the trailing tabs.
+        CGFloat tabWidth = 0;
+        for (UIButton *tab in _tabs)
+            tabWidth = MAX(tabWidth, [tab systemLayoutSizeFittingSize:
+                UILayoutFittingCompressedSize].width);
+        const NSUInteger count = _tabs.count;
+        const CGFloat rowWidth = MAX(pw - 16, count * tabWidth +
+            (count > 1 ? (count - 1) * _navigation.spacing : 0));
+        _navigation.frame = CGRectMake(0, 0, rowWidth, barHeight);
         _navigationScroll.contentSize = _navigation.bounds.size;
+        _navigationScroll.showsHorizontalScrollIndicator = NO;
+        _navigationScroll.alwaysBounceHorizontal = rowWidth > pw - 16;
+        _navigationScroll.alwaysBounceVertical = NO;
         _navRule.frame = CGRectMake(12, barHeight + 14, pw - 24, 1);
         _controllerHint.hidden = YES;
         _pageTitle.frame = CGRectMake(14, barHeight + 22, pw - 28, 18);
