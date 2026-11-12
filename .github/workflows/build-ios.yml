@@ -204,10 +204,22 @@ jobs:
           THEFT4_BUILD_JOBS: 3
         run: ./tools/build_ios_release.sh
 
+      # The artifact is named after the packaged IPA (for example
+      # Theft4_0.3.3_Beta_Mercy_Build), plus the commit for traceability.
+      - name: Name the IPA artifact
+        id: ipa-name
+        working-directory: Theft4
+        run: |
+          set -euo pipefail
+          ipa="$(ls dist/*.ipa | head -n 1)"
+          name="$(basename "$ipa" .ipa)"
+          echo "name=${name}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "$name"
+
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Theft4-ios-unsigned-${{ github.sha }}
+          name: ${{ steps.ipa-name.outputs.name }}
           path: |
             Theft4/dist/*.ipa
             Theft4/dist/*.sha256

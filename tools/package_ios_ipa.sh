@@ -76,6 +76,14 @@ fi
 safe_version="${version//[^A-Za-z0-9._-]/-}"
 safe_build="${build_version//[^A-Za-z0-9._-]/-}"
 base_name="Theft4-${safe_version}-${safe_build}-ios-arm64"
+# A named release (Theft4ReleaseName differing from the version, such as
+# "0.3.3 Beta Mercy Build") names the package after it instead.
+release_name="$(plist_value Theft4ReleaseName)"
+if [[ -n "$release_name" && "$release_name" != "$version" ]]; then
+  safe_release="${release_name// /_}"
+  safe_release="${safe_release//[^A-Za-z0-9._-]/-}"
+  base_name="Theft4_${safe_release}"
+fi
 ipa_path="$output_dir/$base_name.ipa"
 checksum_path="$ipa_path.sha256"
 

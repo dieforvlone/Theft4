@@ -1747,7 +1747,7 @@ static BOOL Theft4PrepareEFLCGameFolder(NSURL *gta, NSURL *eflc, NSString **reas
     }
     if (theft4_validate_installed_game(gta.fileSystemRepresentation, message, sizeof(message)) != 0) {
         if (reason) *reason = @"Set up GTA IV first: copy your extracted GTA IV disc into Files → "
-            @"Theft4 → game and install Title Update 8. GTA IV: EFLC uses GTA IV's program and update.";
+            @"Theft4 → game and install Title Update 8. GTA: EFLC uses GTA IV's program and update.";
         return NO;
     }
     NSError *error = nil;
@@ -1845,13 +1845,13 @@ static BOOL Theft4PrepareEFLCGameFolder(NSURL *gta, NSURL *eflc, NSString **reas
     if (_loading || _executionAttempted || _gamePresentation || _saveTransferBusy) {
         control.selectedSegmentIndex = current;
         [self showSaveMessage:@"CLOSE THE GAME FIRST"
-                     detail:@"Quit and reopen Theft4 to switch between GTA IV and GTA IV: EFLC."];
+                     detail:@"Quit and reopen Theft4 to switch between GTA IV and GTA: EFLC."];
         return;
     }
     NSString *reason = nil;
     if (![self switchToGameVersion:requested reason:&reason]) {
         control.selectedSegmentIndex = current;
-        [self showSaveMessage:@"GTA IV: EFLC IS NOT SET UP" detail:reason ?: @"The game folder is not ready."];
+        [self showSaveMessage:@"GTA: EFLC IS NOT SET UP" detail:reason ?: @"The game folder is not ready."];
         return;
     }
     [NSUserDefaults.standardUserDefaults setInteger:requested forKey:Theft4GameVersionDefaultsKey];
