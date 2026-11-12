@@ -399,10 +399,6 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     _exportSavesButton.accessibilityIdentifier = @"saves.export";
     _importSavesButton = Action(@"IMPORT SAVES FROM FILES", NO);
     _importSavesButton.accessibilityIdentifier = @"saves.import";
-    _installEpisodesButton = Action(@"INSTALL EPISODES FROM FILES", NO);
-    _installEpisodesButton.accessibilityIdentifier = @"episodes.install";
-    _episodesStatusLabel = Copy(@"Episodes: checking…", 12, NO);
-    _episodesStatusLabel.accessibilityIdentifier = @"episodes.status";
     _detailLabel = Copy(@"Waiting for runtime information…", 12, YES);
     _detailLabel.accessibilityIdentifier = @"core.details";
     NSString *displayName = NSBundle.mainBundle.infoDictionary[@"CFBundleDisplayName"] ?: @"Theft4";
@@ -417,8 +413,7 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
         Copy(@"Export a dated backup to Files → On My iPhone/iPad → Theft4 → Save Exports. Import a Theft4 save-export folder only while the game is closed; current saves are backed up first.", 12, NO),
         _exportSavesButton, _importSavesButton,
         Copy(@"EPISODES FROM LIBERTY CITY", 13, YES),
-        Copy(@"Add The Lost and Damned and The Ballad of Gay Tony. Copy your own EFLC disc image (.iso) or its extracted folder into Files → On My iPhone/iPad → Theft4, then choose it here. Both episodes are found and installed automatically. The disc image can be deleted afterwards.", 12, NO),
-        _episodesStatusLabel, _installEpisodesButton,
+        Copy(@"Choose GTA IV: EFLC on the Play page. It loads Files → Theft4 → game_eflc: copy the contents of your extracted Episodes from Liberty City disc there (everything except its default.xex), then add GTA IV's default.xex, default.xexp and update folder from your game folder.", 12, NO),
         _prepareButton, _restartButton, _detailLabel,
         Copy([NSString stringWithFormat:@"On first launch, %@ creates Files → On My iPhone/iPad → %@ → game. Copy the contents of the prepared game folder into game, then verify.", displayName, displayName], 13, NO)
     ]];

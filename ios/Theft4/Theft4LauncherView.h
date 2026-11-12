@@ -43,8 +43,6 @@
 @property(nonatomic, readonly) UIButton *downloadLogButton;
 @property(nonatomic, readonly) UIButton *exportSavesButton;
 @property(nonatomic, readonly) UIButton *importSavesButton;
-@property(nonatomic, readonly) UIButton *installEpisodesButton;
-@property(nonatomic, readonly) UILabel *episodesStatusLabel;
 - (void)refreshConfigurationSummary;
 - (void)setActive:(BOOL)active;
 - (void)retireScene;

@@ -554,10 +554,6 @@ static BOOL Theft4InstallSaveExport(NSURL *selected, NSURL *support, NSURL *docu
     UIButton *_importSavesButton;
     UIDocumentPickerViewController *_saveImportPicker;
     BOOL _saveTransferBusy;
-    UIButton *_installEpisodesButton;
-    UILabel *_episodesStatusLabel;
-    UIDocumentPickerViewController *_episodePicker;
-    UIAlertController *_episodeProgressAlert;
     Theft4TouchControls *_touchControls;
     BOOL _gamePresentation;
     BOOL _launcherDuringGame;
@@ -620,8 +616,6 @@ static BOOL Theft4InstallSaveExport(NSURL *selected, NSURL *support, NSURL *docu
 - (void)downloadLatestLogCapture;
 - (void)exportSavesToFiles;
 - (void)importSavesFromFiles;
-- (void)installEpisodesFromFiles;
-- (void)refreshEpisodeStatus;
 - (void)showSaveMessage:(NSString *)title detail:(NSString *)detail;
 - (void)updateFrameTimeHUD;
 - (BOOL)beginPublicationCapture;
@@ -872,11 +866,6 @@ static void bootEvent(void *context, const char *event) {
                  forControlEvents:UIControlEventTouchUpInside];
     [_bringupOverlay.gameVersion addTarget:self action:@selector(gameVersionChanged:)
                           forControlEvents:UIControlEventValueChanged];
-    _installEpisodesButton = _bringupOverlay.installEpisodesButton;
-    _episodesStatusLabel = _bringupOverlay.episodesStatusLabel;
-    [_installEpisodesButton addTarget:self action:@selector(installEpisodesFromFiles)
-                     forControlEvents:UIControlEventTouchUpInside];
-    [self refreshEpisodeStatus];
 #ifdef THEFT4_BC_TEXTURE_COMPATIBILITY
     _astcConversion = _bringupOverlay.astcConversion;
 #ifdef THEFT4_ASTC_EXPERIMENT
@@ -1062,7 +1051,6 @@ static void bootEvent(void *context, const char *event) {
         inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:&error];
     _applicationSupportURL = support;
     _supportURL = [support URLByAppendingPathComponent:@"Theft4" isDirectory:YES];
-    [self refreshEpisodeStatus];
     if (!_supportURL || ![NSFileManager.defaultManager createDirectoryAtURL:_supportURL
         withIntermediateDirectories:YES attributes:nil error:&error]) {
         _failure = error.localizedDescription ?: @"Application Support is unavailable";
@@ -1735,7 +1723,6 @@ static void bootEvent(void *context, const char *event) {
     _setupValidated = NO;
     _baseGameChecked = NO;
     _bringupOverlay.gameVersion.selectedSegmentIndex = eflc ? 1 : 0;
-    [self refreshEpisodeStatus];
     [self completeSetupForInstalledGame];
     [self record:eflc ? @"game.version_eflc" : @"game.version_gta4"];
     [self refresh];
@@ -1819,113 +1806,6 @@ static void bootEvent(void *context, const char *event) {
     });
 }
 
-#ifdef THEFT4_HAS_GAME_LOADER
-static NSString *Theft4EpisodeNames(unsigned mask) {
-    const unsigned both = THEFT4_EPISODE_TLAD | THEFT4_EPISODE_TBOGT;
-    if ((mask & both) == both) return @"The Lost and Damned and The Ballad of Gay Tony";
-    if (mask & THEFT4_EPISODE_TLAD) return @"The Lost and Damned";
-    if (mask & THEFT4_EPISODE_TBOGT) return @"The Ballad of Gay Tony";
-    return nil;
-}
-#endif
-
-- (void)refreshEpisodeStatus {
-#ifdef THEFT4_HAS_GAME_LOADER
-    const unsigned mask = _supportURL ? theft4_installed_episodes(
-        _supportURL.fileSystemRepresentation) : 0;
-    NSString *names = Theft4EpisodeNames(mask);
-    _episodesStatusLabel.text = names ? [@"Installed: " stringByAppendingString:names]
-                                      : @"No episodes installed.";
-#else
-    _episodesStatusLabel.text = @"This build does not include the episode installer.";
-    _installEpisodesButton.enabled = NO;
-#endif
-}
-
-#ifdef THEFT4_HAS_GAME_LOADER
-static void Theft4EpisodeProgress(void *context, unsigned long long copied,
-                                  unsigned long long total) {
-    __weak UIAlertController *alert = (__bridge UIAlertController *)context;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIAlertController *strongAlert = alert;
-        if (!strongAlert || total == 0) return;
-        strongAlert.message = [NSString stringWithFormat:
-            @"Copying episode files: %.1f of %.1f GB (%d%%).\nKeep Theft4 open.",
-            copied / 1e9, total / 1e9, (int)(copied * 100 / total)];
-    });
-}
-#endif
-
-- (void)installEpisodesFromFiles {
-    if (!_supportURL || !_gameURL || _loading || _gamePresentation || _saveTransferBusy) {
-        [self showSaveMessage:@"CLOSE THE GAME FIRST"
-                     detail:@"Quit and reopen Theft4 before installing episodes."];
-        return;
-    }
-    if (![self hasInstalledBaseAndUpdate]) {
-        [self showSaveMessage:@"FINISH GTA IV SETUP FIRST"
-                     detail:@"Install and verify GTA IV and Title Update 8 before adding episodes."];
-        return;
-    }
-    // Open in place: a disc image is several gigabytes, so it is read directly
-    // instead of being copied into the app first.
-    _episodePicker = [[UIDocumentPickerViewController alloc]
-        initForOpeningContentTypes:@[UTTypeFolder, UTTypeData] asCopy:NO];
-    _episodePicker.delegate = self;
-    _episodePicker.allowsMultipleSelection = NO;
-    [self presentViewController:_episodePicker animated:YES completion:nil];
-}
-
-- (void)installEpisodesFromURL:(NSURL *)selected {
-#ifdef THEFT4_HAS_GAME_LOADER
-    const BOOL scoped = [selected startAccessingSecurityScopedResource];
-    _saveTransferBusy = YES;
-    _installEpisodesButton.enabled = NO;
-    UIAlertController *progressAlert = [UIAlertController alertControllerWithTitle:@"INSTALLING EPISODES"
-        message:@"Searching the selected source for episodes…\nKeep Theft4 open."
-        preferredStyle:UIAlertControllerStyleAlert];
-    _episodeProgressAlert = progressAlert;
-    [self presentViewController:progressAlert animated:YES completion:nil];
-    [UIApplication.sharedApplication setIdleTimerDisabled:YES];
-    NSURL *game = [_gameURL copy];
-    NSURL *support = [_supportURL copy];
-    [self record:@"episodes.install_started"];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        char message[1024] = {};
-        unsigned installed = 0;
-        const int result = theft4_install_episodes(game.fileSystemRepresentation,
-            support.fileSystemRepresentation, selected.fileSystemRepresentation,
-            Theft4EpisodeProgress, (__bridge void *)progressAlert, &installed,
-            message, sizeof(message));
-        if (scoped) [selected stopAccessingSecurityScopedResource];
-        NSString *detail = [NSString stringWithUTF8String:message];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [UIApplication.sharedApplication setIdleTimerDisabled:NO];
-            self->_saveTransferBusy = NO;
-            self->_installEpisodesButton.enabled = YES;
-            [self refreshEpisodeStatus];
-            [self record:result == 0 ? @"episodes.install_completed" : @"episodes.install_failed"];
-            void (^report)(void) = ^{
-                NSString *names = Theft4EpisodeNames(installed);
-                [self showSaveMessage:result == 0 ? @"EPISODES INSTALLED" : @"EPISODES NOT INSTALLED"
-                             detail:result == 0
-                    ? [NSString stringWithFormat:@"%@ will be available from the game's main menu the next time you press Play. You can now delete the disc image from Files to free space.", names ?: @"The episodes"]
-                    : (detail.length ? detail : @"The selected source could not be installed.")];
-            };
-            if (self.presentedViewController == progressAlert) {
-                [progressAlert dismissViewControllerAnimated:YES completion:report];
-            } else {
-                report();
-            }
-            self->_episodeProgressAlert = nil;
-        });
-    });
-#else
-    (void)selected;
-    [self refreshEpisodeStatus];
-#endif
-}
-
 - (void)importSavesFromFiles {
     if (!_supportURL || _loading || _gamePresentation || _saveTransferBusy) {
         [self showSaveMessage:@"CLOSE THE GAME FIRST"
@@ -1957,25 +1837,6 @@ static void Theft4EpisodeProgress(void *context, unsigned long long copied,
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller
 didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    if (controller == _episodePicker) {
-        _episodePicker = nil;
-        NSURL *selected = urls.firstObject;
-        if (!selected) return;
-        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"INSTALL EPISODES?"
-            message:[NSString stringWithFormat:
-                @"Theft4 will search \"%@\" for The Lost and Damned and The Ballad of Gay Tony and copy them into the app. This needs several gigabytes of free space and can take a while. Keep Theft4 open until it finishes.",
-                selected.lastPathComponent]
-            preferredStyle:UIAlertControllerStyleAlert];
-        [confirm addAction:[UIAlertAction actionWithTitle:@"CANCEL"
-            style:UIAlertActionStyleCancel handler:nil]];
-        [confirm addAction:[UIAlertAction actionWithTitle:@"INSTALL"
-            style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                (void)action;
-                [self installEpisodesFromURL:selected];
-            }]];
-        [self presentViewController:confirm animated:YES completion:nil];
-        return;
-    }
     if (controller == _saveImportPicker) {
         _saveImportPicker = nil;
         NSURL *selected = urls.firstObject;
@@ -2113,10 +1974,6 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 }
 
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
-    if (controller == _episodePicker) {
-        _episodePicker = nil;
-        return;
-    }
     if (controller == _saveImportPicker) {
         _saveImportPicker = nil;
         return;
