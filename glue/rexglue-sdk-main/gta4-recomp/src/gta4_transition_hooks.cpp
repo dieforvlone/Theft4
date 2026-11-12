@@ -1,10 +1,6 @@
 #include <rex/diagnostics/runtime_callers.h>
 #include <cstdint>
 #include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <cstring>
-#include <thread>
 
 #include <rex/chrono/clock.h>
 #include <rex/audio/handoff_trace.h>
@@ -257,38 +253,9 @@ extern "C" void sub_82A1A200(PPCContext& ctx, uint8_t* base) {
   __imp__sub_82A1A200(ctx, base);
 }
 
-// GPU fence wait. The title spins on sub_82193E48 (with a db16cyc hint) for
-// up to 1/8 s; on iPhone that kept a performance core busy with ~14,000
-// checks per second. Wait here with short sleeps first, then run the title's
-// routine: it re-checks once and returns, or keeps its own timeout path.
-// THEFT4_FENCE_SLEEP=0 restores the original spin.
-static bool FenceSleepEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("THEFT4_FENCE_SLEEP");
-    return !value || std::strcmp(value, "0") != 0;
-  }();
-  return enabled;
-}
+// Preserve the generated implementation; capture the incoming guest return PC.
 extern "C" void sub_82193D80(PPCContext& ctx, uint8_t* base) {
   rex::diagnostics::callers::Span sample(rex::diagnostics::callers::GuestFencePoll, uint32_t(ctx.lr));
-  if (FenceSleepEnabled()) {
-    const auto fence = ctx.r3;
-    const auto lr = ctx.lr;
-    sub_82193E48(ctx, base);
-    if (ctx.r3.s32 == 0) {
-      const auto start = std::chrono::steady_clock::now();
-      unsigned polls = 0;
-      do {
-        if (++polls <= 16) std::this_thread::yield();
-        else std::this_thread::sleep_for(std::chrono::microseconds(50));
-        ctx.r3 = fence;
-        sub_82193E48(ctx, base);
-      } while (ctx.r3.s32 == 0 &&
-               std::chrono::steady_clock::now() - start < std::chrono::milliseconds(50));
-    }
-    ctx.r3 = fence;
-    ctx.lr = lr;
-  }
   __imp__sub_82193D80(ctx, base);
 }
 
