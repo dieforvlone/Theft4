@@ -1683,6 +1683,112 @@ static void bootEvent(void *context, const char *event) {
 // the per-game Application Support root (saves, caches, logs, prepared
 // textures). GTA IV keeps the original locations; EFLC uses game_eflc and
 // Theft4-EFLC so the two games never share saves or caches.
+#ifdef THEFT4_HAS_GAME_LOADER
+static BOOL Theft4IsSameFileSystemItem(NSURL *a, NSURL *b) {
+    id first = nil, second = nil;
+    [a getResourceValue:&first forKey:NSURLFileResourceIdentifierKey error:nil];
+    [b getResourceValue:&second forKey:NSURLFileResourceIdentifierKey error:nil];
+    return first && second && [first isEqual:second];
+}
+
+// Copies every file below source into destination. Existing destination files
+// are replaced only when overwrite is YES, so a second pass can fill gaps.
+static BOOL Theft4CopyTree(NSURL *source, NSURL *destination, BOOL overwrite, NSError **error) {
+    NSFileManager *files = NSFileManager.defaultManager;
+    if (![files createDirectoryAtURL:destination withIntermediateDirectories:YES
+            attributes:nil error:error]) return NO;
+    // enumeratorAtPath: yields paths relative to source, independent of how
+    // the container path is spelled (/var versus /private/var).
+    for (NSString *relative in [files enumeratorAtPath:source.path]) {
+        NSURL *item = [source URLByAppendingPathComponent:relative];
+        NSURL *target = [destination URLByAppendingPathComponent:relative];
+        BOOL directory = NO;
+        if (![files fileExistsAtPath:item.path isDirectory:&directory]) continue;
+        if (directory) {
+            if (![files createDirectoryAtURL:target withIntermediateDirectories:YES
+                    attributes:nil error:error]) return NO;
+            continue;
+        }
+        if ([files fileExistsAtPath:target.path]) {
+            if (!overwrite) continue;
+            if (![files removeItemAtURL:target error:error]) return NO;
+        }
+        if (![files copyItemAtURL:item toURL:target error:error]) return NO;
+    }
+    return YES;
+}
+
+static BOOL Theft4EFLCCopyFailed(NSString **reason, NSError *error) {
+    if (reason) *reason = [NSString stringWithFormat:@"Could not prepare game_eflc: %@",
+        error.localizedDescription ?: @"a file could not be copied."];
+    return NO;
+}
+
+// Turns an extracted Episodes from Liberty City disc in game_eflc into a
+// playable folder: GTA IV's TU8 program pair and title update are copied in
+// (GTA IV's own folder is only read), the disc's own default.xex is kept as
+// default_eflc.xex, and files the disc's Update folder adds (the episode
+// shaders) fill the gaps in the merged update folder. Already-prepared
+// folders are left untouched.
+static BOOL Theft4PrepareEFLCGameFolder(NSURL *gta, NSURL *eflc, NSString **reason) {
+    NSFileManager *files = NSFileManager.defaultManager;
+    char message[1024] = {};
+    if (theft4_validate_installed_game(eflc.fileSystemRepresentation, message,
+            sizeof(message)) == 0) return YES;
+    BOOL isDirectory = NO;
+    const BOOL hasEpisodes =
+        ([files fileExistsAtPath:[eflc URLByAppendingPathComponent:@"DLC1"].path isDirectory:&isDirectory] && isDirectory) ||
+        ([files fileExistsAtPath:[eflc URLByAppendingPathComponent:@"DLC2"].path isDirectory:&isDirectory] && isDirectory);
+    if (![files fileExistsAtPath:[eflc URLByAppendingPathComponent:@"common.rpf"].path] || !hasEpisodes) {
+        if (reason) *reason = @"Copy the contents of your extracted Episodes from Liberty City disc "
+            @"(the standalone Xbox 360 disc) into Files → Theft4 → game_eflc. It should contain "
+            @"common.rpf, xbox360.rpf, audio.rpf, DLC1 and DLC2. Theft4 completes the rest automatically.";
+        return NO;
+    }
+    if (theft4_validate_installed_game(gta.fileSystemRepresentation, message, sizeof(message)) != 0) {
+        if (reason) *reason = @"Set up GTA IV first: copy your extracted GTA IV disc into Files → "
+            @"Theft4 → game and install Title Update 8. GTA IV: EFLC uses GTA IV's program and update.";
+        return NO;
+    }
+    NSError *error = nil;
+    NSURL *eflcProgram = [eflc URLByAppendingPathComponent:@"default.xex"];
+    NSURL *keptProgram = [eflc URLByAppendingPathComponent:@"default_eflc.xex"];
+    if ([files fileExistsAtPath:eflcProgram.path]) {
+        if (![files fileExistsAtPath:keptProgram.path]) {
+            if (![files moveItemAtURL:eflcProgram toURL:keptProgram error:&error]) return Theft4EFLCCopyFailed(reason, error);
+        } else if (![files removeItemAtURL:eflcProgram error:&error]) return Theft4EFLCCopyFailed(reason, error);
+    }
+    for (NSString *name in @[@"default.xex", @"default.xexp", @"aes_key.bin"]) {
+        NSURL *source = [gta URLByAppendingPathComponent:name];
+        NSURL *target = [eflc URLByAppendingPathComponent:name];
+        if (![files fileExistsAtPath:source.path]) continue;
+        if ([files fileExistsAtPath:target.path] && ![files removeItemAtURL:target error:&error]) return Theft4EFLCCopyFailed(reason, error);
+        if (![files copyItemAtURL:source toURL:target error:&error]) return Theft4EFLCCopyFailed(reason, error);
+    }
+    {
+        NSURL *update = [eflc URLByAppendingPathComponent:@"update" isDirectory:YES];
+        NSURL *gtaUpdate = [gta URLByAppendingPathComponent:@"update" isDirectory:YES];
+        if ([files fileExistsAtPath:gtaUpdate.path] && !Theft4CopyTree(gtaUpdate, update, YES, &error))
+            return Theft4EFLCCopyFailed(reason, error);
+        // The disc ships its own "Update" folder. On a case-sensitive volume it
+        // is a separate directory: add only what GTA IV's update lacks.
+        for (NSURL *entry in [files contentsOfDirectoryAtURL:eflc includingPropertiesForKeys:nil
+                options:0 error:nil]) {
+            if (![entry.lastPathComponent.lowercaseString isEqualToString:@"update"] ||
+                [entry.lastPathComponent isEqualToString:@"update"] ||
+                Theft4IsSameFileSystemItem(entry, update)) continue;
+            if (!Theft4CopyTree(entry, update, NO, &error)) return Theft4EFLCCopyFailed(reason, error);
+        }
+    }
+    if (theft4_validate_installed_game(eflc.fileSystemRepresentation, message, sizeof(message)) != 0) {
+        if (reason) *reason = [NSString stringWithFormat:
+            @"game_eflc was prepared but still did not pass the GTA IV + TU8 check: %s", message];
+        return NO;
+    }
+    return YES;
+}
+#endif
+
 - (BOOL)switchToGameVersion:(NSInteger)version reason:(NSString **)reason {
     NSURL *documents = [NSFileManager.defaultManager URLForDirectory:NSDocumentDirectory
         inDomain:NSUserDomainMask appropriateForURL:nil create:NO error:nil];
@@ -1695,21 +1801,12 @@ static void bootEvent(void *context, const char *event) {
     NSURL *support = [_applicationSupportURL URLByAppendingPathComponent:
         eflc ? @"Theft4-EFLC" : @"Theft4" isDirectory:YES];
     if (eflc) {
-        if (![NSFileManager.defaultManager fileExistsAtPath:
-                [[game URLByAppendingPathComponent:@"default.xex"] path]]) {
-            if (reason) *reason = @"Copy the contents of your extracted Episodes from Liberty City disc "
-                @"into Files → Theft4 → game_eflc (everything except its default.xex). Then add GTA IV's "
-                @"default.xex, default.xexp and update folder from your game folder.";
-            return NO;
-        }
 #ifdef THEFT4_HAS_GAME_LOADER
-        char message[1024] = {};
-        if (theft4_validate_installed_game(game.fileSystemRepresentation, message,
-                sizeof(message)) != 0) {
-            if (reason) *reason = [NSString stringWithFormat:
-                @"game_eflc needs GTA IV's default.xex, default.xexp and update folder: %s", message];
+        if (!Theft4PrepareEFLCGameFolder(Theft4GameDirectoryURL(documents), game, reason))
             return NO;
-        }
+#else
+        if (reason) *reason = @"This build does not include the game loader.";
+        return NO;
 #endif
     }
     NSError *error = nil;

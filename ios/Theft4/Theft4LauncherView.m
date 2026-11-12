@@ -413,7 +413,7 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
         Copy(@"Export a dated backup to Files → On My iPhone/iPad → Theft4 → Save Exports. Import a Theft4 save-export folder only while the game is closed; current saves are backed up first.", 12, NO),
         _exportSavesButton, _importSavesButton,
         Copy(@"EPISODES FROM LIBERTY CITY", 13, YES),
-        Copy(@"Choose GTA IV: EFLC on the Play page. It loads Files → Theft4 → game_eflc: copy the contents of your extracted Episodes from Liberty City disc there (everything except its default.xex), then add GTA IV's default.xex, default.xexp and update folder from your game folder.", 12, NO),
+        Copy(@"Copy the contents of your extracted Episodes from Liberty City disc (the standalone Xbox 360 disc) into Files → Theft4 → game_eflc, then choose GTA IV: EFLC on the Play page. Theft4 adds GTA IV's program and title update from your game folder automatically; GTA IV must be set up first.", 12, NO),
         _prepareButton, _restartButton, _detailLabel,
         Copy([NSString stringWithFormat:@"On first launch, %@ creates Files → On My iPhone/iPad → %@ → game. Copy the contents of the prepared game folder into game, then verify.", displayName, displayName], 13, NO)
     ]];
