@@ -7,7 +7,7 @@ name: iOS Build
 
 on:
   push:
-    branches: ['claude/**']
+    branches: ['claude/**', 'mercy-build']
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
