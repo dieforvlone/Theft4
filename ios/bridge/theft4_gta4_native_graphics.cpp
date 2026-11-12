@@ -2,11 +2,14 @@
 
 #include "theft4_metal_presenter.h"
 #include "theft4_retail_mode.h"
+#include "theft4_async_frame_backend.h"
 
 #include <dispatch/dispatch.h>
 #include <pthread.h>
 
+#include <cstdlib>
 #include <memory>
+#include <string_view>
 #include <mutex>
 #include <string>
 
@@ -249,6 +252,15 @@ theft4_create_gta4_metal_graphics() {
   if(!backend||!backend->Capabilities().max_image_dimension_2d) {
     REXLOG_ERROR("Theft4 direct Metal renderer rejected the Apple GPU");return nullptr;
   }
+  // Two-core rendering: encode each frame on its own thread while the renderer
+  // lowers the next one. THEFT4_ASYNC_METAL_SUBMIT=0 (launcher switch off)
+  // keeps encoding on the renderer thread.
+  const char* async_submit=std::getenv("THEFT4_ASYNC_METAL_SUBMIT");
+  const bool two_core=!async_submit||std::string_view(async_submit)!="0";
+  if(two_core)backend=theft4::render::MakeAsyncFrameBackend(std::move(backend),
+      [](const char* message){
+        if(theft4_retail_mode())REXLOG_WARN("{}",message);else REXLOG_INFO("{}",message);});
+  REXLOG_WARN("Theft4 two-core rendering: {}",two_core?"on":"off");
   auto graphics=std::make_unique<rex::graphics::gta4_native::Gta4NativeGraphicsSystem>(std::move(backend));
   {
     std::lock_guard lock(native_lifecycle_mutex);

@@ -223,4 +223,9 @@ bool ValidateFrame(const FramePlan&,const SurfaceContents& initial,
 bool ValidateFrame(const FramePlan&,const SurfaceContents& initial,
                    SurfaceContents& final,std::string& error,IndexRangeCache* indices,
                    FrameValidationScratch& scratch);
+// The contents ValidateFrame would publish for a plan it accepts: the same
+// load, clear, copy, present, resolve and store rules, without validation.
+// Lets a caller learn a frame's published contents before a worker thread
+// encodes it; the worker still validates the frame in full.
+void PredictFrameContents(const FramePlan&,const SurfaceContents& initial,SurfaceContents& final);
 }

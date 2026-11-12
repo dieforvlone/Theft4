@@ -313,6 +313,14 @@ static bool ValidateSampledViewOf(const Surface* s,const SampledSurfaceView& vie
 bool ValidateSampledView(const FramePlan& frame,const SampledSurfaceView& view,std::string& error,bool allow_multisampled) {
   return ValidateSampledViewOf(FindSurface(frame,view.surface),view,error,allow_multisampled);
 }
+#ifdef THEFT4_PREDICT_CONTENTS_SELFTEST
+}  // namespace theft4::render
+#include <cstdio>
+#include <cstdlib>
+size_t g_predict_selftest_checks=0;
+static struct PredictSelftestReport{~PredictSelftestReport(){std::fprintf(stderr,"predict-selftest checks=%zu\n",g_predict_selftest_checks);}} g_predict_selftest_report;
+namespace theft4::render {
+#endif
 namespace {
 bool Reject(std::string& error,const char* message){error=message;return false;}
 bool View(const Surface* s,const SurfaceView& v) {
@@ -573,6 +581,13 @@ static bool ValidateFrameImpl(const FramePlan& f,const SurfaceContents& initial,
   if(f.output&&(!view_valid(*f.output)||f.output->aspect!=Aspect::Color||
                find(f.output->surface)->samples!=1||!contents.contains(*f.output)))
     return Reject(error,"Frame output is unavailable or discarded");
+#ifdef THEFT4_PREDICT_CONTENTS_SELFTEST
+  {
+    SurfaceContents predicted;PredictFrameContents(f,initial,predicted);
+    if(predicted!=contents){std::fprintf(stderr,"PredictFrameContents mismatch\n");std::abort();}
+    ++g_predict_selftest_checks;
+  }
+#endif
   final=std::move(contents);
   error.clear();return true;
 }
@@ -592,5 +607,69 @@ bool ValidateFrame(const FramePlan& f,const SurfaceContents& initial,
     scratch.Clear();return false;
   }
   return true;
+}
+void PredictFrameContents(const FramePlan& f,const SurfaceContents& initial,SurfaceContents& final) {
+  // Mirrors the content transitions of ValidateFrameImpl, in the same order.
+  std::map<SurfaceKey,const Surface*> declarations;
+  for(const auto& s:f.surfaces)if(s)declarations.emplace(s->key,s.get());
+  const auto find=[&](SurfaceKey key)->const Surface* {
+    const auto i=declarations.find(key);return i==declarations.end()?nullptr:i->second;
+  };
+  SurfaceContents contents;
+  for(const auto& v:initial)if(find(v.surface))contents.insert(v);
+  for(const auto& command:f.commands) {
+    if(const auto* copy=std::get_if<ImageCopy>(&command)) {
+      const auto* src=find(copy->source.surface);
+      const auto* dst=find(copy->destination.surface);
+      if(!src||!dst)continue;
+      const bool combined=src->format==Format::Depth32FloatStencil8;
+      if(copy->destination_origin==std::array<uint32_t,2>{0,0}&&
+         copy->extent==std::array<uint32_t,2>{Width(*dst,copy->destination),Height(*dst,copy->destination)}) {
+        contents.insert(copy->destination);
+        if(combined)contents.insert({copy->destination.surface,copy->destination.level,copy->destination.slice,Aspect::Stencil});
+      }
+      continue;
+    }
+    const auto& pass=std::get<Pass>(command);
+    constexpr size_t attachment_limit=std::tuple_size_v<decltype(pass.colors)>+2;
+    std::array<const Attachment*,attachment_limit> attachment_storage;
+    size_t attachment_count=0;
+    for(const auto& a:pass.colors)if(a)attachment_storage[attachment_count++]=&*a;
+    if(pass.depth)attachment_storage[attachment_count++]=&*pass.depth;
+    if(pass.stencil)attachment_storage[attachment_count++]=&*pass.stencil;
+    const auto attachments=std::span(attachment_storage.data(),attachment_count);
+    uint32_t width=0,height=0;
+    if(attachments.empty()){width=pass.attachmentless_extent[0];height=pass.attachmentless_extent[1];}
+    for(const auto* a:attachments) {
+      const auto* s=find(a->view.surface);
+      if(s&&!width){width=Width(*s,a->view);height=Height(*s,a->view);}
+      if(a->load==Load::Clear)contents.insert(a->view);
+      if(a->load==Load::Discard)contents.erase(a->view);
+    }
+    for(const auto& command:pass.commands) {
+      if(const auto* clear=std::get_if<RectClear>(&command)) {
+        if(clear->rectangle!=std::array<uint32_t,4>{0,0,width,height})continue;
+        for(size_t slot=0;slot<4;++slot)
+          if((clear->colors&(1u<<slot))&&pass.colors[slot])contents.insert(pass.colors[slot]->view);
+        if(clear->depth&&pass.depth)contents.insert(pass.depth->view);
+        if(clear->stencil&&pass.stencil)contents.insert(pass.stencil->view);
+        continue;
+      }
+      if(const auto* host=GetHostDraw(command)) {
+        const auto& p=host->pipeline;
+        if(host->program==HostProgram::Present&&p.samples==1&&pass.colors[0]&&
+           !p.depth_test&&!p.stencil_test&&!p.blends[0].enabled&&p.blends[0].write_mask==15&&
+           host->scissor==std::array<uint32_t,4>{0,0,width,height})contents.insert(pass.colors[0]->view);
+      }
+    }
+    for(const auto* a:attachments) {
+      const bool defined=contents.contains(a->view);
+      if(a->resolve) {
+        if(defined)contents.insert(*a->resolve);else contents.erase(*a->resolve);
+      }
+      if(a->store==Store::Discard||a->store==Store::Resolve)contents.erase(a->view);
+    }
+  }
+  final=std::move(contents);
 }
 }

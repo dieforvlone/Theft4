@@ -32,6 +32,7 @@
 @property(nonatomic, readonly) UISegmentedControl *antiAliasing;
 @property(nonatomic, readonly) UISwitch *performanceCapture;
 @property(nonatomic, readonly) UISwitch *skipIntro;
+@property(nonatomic, readonly) UISwitch *twoCoreRendering;
 @property(nonatomic, readonly) UISwitch *customTimeCycle;
 @property(nonatomic, readonly) UISwitch *nativeAspect;
 @property(nonatomic, readonly) UISwitch *godMode;

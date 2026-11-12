@@ -319,7 +319,8 @@ if(THEFT4_ENABLE_GAME_STARTUP)
                 bridge/theft4_metal_resources.mm
                 bridge/theft4_metal_plan.mm
                 bridge/theft4_metal_frame.mm
-                bridge/theft4_metal_host_shaders.mm)
+                bridge/theft4_metal_host_shaders.mm
+                bridge/theft4_async_frame_backend.mm)
             # Xcode does not preserve the mixed C++/ObjC++ language expression
             # here. Set ARC on each owning Metal source explicitly: receipts,
             # resources and queued draw records retain Objective-C objects.
@@ -331,6 +332,7 @@ if(THEFT4_ENABLE_GAME_STARTUP)
                 bridge/theft4_metal_plan.mm
                 bridge/theft4_metal_frame.mm
                 bridge/theft4_metal_host_shaders.mm
+                bridge/theft4_async_frame_backend.mm
                 PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
             target_compile_definitions(theft4_gta4_native_compile PUBLIC THEFT4_DIRECT_METAL_BACKEND=1)
             target_link_libraries(theft4_gta4_native_compile PRIVATE

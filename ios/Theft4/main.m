@@ -37,6 +37,12 @@ extern int rex_gta4_native_profile_status(void);
 #include "theft4_boot.h"
 #endif
 
+#ifdef THEFT4_DEVICE_BUILD_CPU
+#define THEFT4_BUILD_CPU_DESCRIPTION THEFT4_DEVICE_BUILD_CPU " (" THEFT4_DEVICE_BUILD_PREFIX "* only)"
+#else
+#define THEFT4_BUILD_CPU_DESCRIPTION "default (every iPhone)"
+#endif
+
 static NSString *Theft4PerformanceProfileFields(void) {
     NSProcessInfo *process = NSProcessInfo.processInfo;
     BOOL standard = [process hasPerformanceProfile:NSProcessPerformanceProfileDefault];
@@ -613,6 +619,7 @@ static BOOL Theft4InstallSaveExport(NSURL *selected, NSURL *support, NSURL *docu
 - (void)resetAutomaticCaptureForNewSession;
 - (void)recordWindowState:(NSString *)event;
 - (void)skipIntroChanged:(UISwitch *)sender;
+- (void)twoCoreRenderingChanged:(UISwitch *)sender;
 - (void)downloadLatestLogCapture;
 - (void)exportSavesToFiles;
 - (void)importSavesFromFiles;
@@ -837,6 +844,10 @@ static void bootEvent(void *context, const char *event) {
     _bringupOverlay.skipIntro.on = ![NSUserDefaults.standardUserDefaults objectForKey:@"Theft4SkipIntro"] ||
         [NSUserDefaults.standardUserDefaults boolForKey:@"Theft4SkipIntro"];
     [_bringupOverlay.skipIntro addTarget:self action:@selector(skipIntroChanged:)
+        forControlEvents:UIControlEventValueChanged];
+    _bringupOverlay.twoCoreRendering.on = ![NSUserDefaults.standardUserDefaults objectForKey:@"Theft4TwoCoreRendering"] ||
+        [NSUserDefaults.standardUserDefaults boolForKey:@"Theft4TwoCoreRendering"];
+    [_bringupOverlay.twoCoreRendering addTarget:self action:@selector(twoCoreRenderingChanged:)
         forControlEvents:UIControlEventValueChanged];
     _bringupOverlay.godMode.on = [NSUserDefaults.standardUserDefaults boolForKey:@"Theft4ModGodMode"];
     _bringupOverlay.unlimitedAmmo.on = [NSUserDefaults.standardUserDefaults boolForKey:@"Theft4ModUnlimitedAmmo"];
@@ -2122,6 +2133,10 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     [NSUserDefaults.standardUserDefaults setBool:sender.on forKey:@"Theft4SkipIntro"];
 }
 
+- (void)twoCoreRenderingChanged:(UISwitch *)sender {
+    [NSUserDefaults.standardUserDefaults setBool:sender.on forKey:@"Theft4TwoCoreRendering"];
+}
+
 - (void)gameplayModChanged:(UISwitch *)sender {
     if (_executionAttempted) return;
     NSString *key = sender == _bringupOverlay.godMode
@@ -2430,6 +2445,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     BOOL fsrBoost = _fsrBoost.on;
     BOOL motionBlur = _motionBlur.on;
     BOOL depthOfField = _depthOfField.on;
+    BOOL twoCoreRendering = !_bringupOverlay.twoCoreRendering || _bringupOverlay.twoCoreRendering.on;
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSFileManager *fm = NSFileManager.defaultManager;
@@ -2473,6 +2489,8 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
              "iOS/iPadOS: %@\n"
              "Physical memory: %llu MiB\n"
              "Theft4 device profile: %@\n"
+             "Build CPU target: %s\n"
+             "Two-core rendering: %@\n"
              "Lightweight capture switch at export: %@\n"
              "Frame counter enabled: %@\n"
              "Anisotropic filtering: %@\n"
@@ -2484,6 +2502,8 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
             [NSDate date], Theft4DisplayName(), version, build,
             NSBundle.mainBundle.bundleIdentifier ?: @"unknown", deviceName, machine,
             systemVersion, (unsigned long long)(physicalMemory >> 20), profile,
+            THEFT4_BUILD_CPU_DESCRIPTION,
+            twoCoreRendering ? @"ON" : @"OFF",
             performanceCapture ? @"ON" : @"OFF", showFPS ? @"ON" : @"OFF",
             anisotropy ? @"ON" : @"OFF", enhancedOutput ? @"ON" : @"OFF",
             fsrBoost ? @"ON" : @"OFF", motionBlur ? @"ON" : @"OFF",
@@ -3299,6 +3319,8 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         rex_frame_scheduling_set_mode(THEFT4_DEFAULT_FRAME_SCHEDULING);
         theft4_apply_performance_defaults();
         setenv("THEFT4_SKIP_INTRO", _bringupOverlay.skipIntro.on ? "1" : "0", 1);
+        setenv("THEFT4_ASYNC_METAL_SUBMIT",
+            !_bringupOverlay.twoCoreRendering || _bringupOverlay.twoCoreRendering.on ? "1" : "0", 1);
         if (_performanceCapture.on) [self beginPublicationCapture];
         // Apply the persisted launcher choice before the background runtime
         // reads and validates its native-renderer launch configuration.

@@ -1152,7 +1152,12 @@ bool Gta4NativeGraphicsSystem::PublishNativeMetalFrame(
     // The Metal backend owns complete frame admission and returns its accepted
     // content journal. Per-draw source admission above still rejects malformed
     // title draws before they enter this plan; no frame-wide check is skipped.
-    if(!frame_backend_->Submit(plan,present.device!=0,error,&final))return false;
+    if(!frame_backend_->Submit(plan,present.device!=0,error,&final)) {
+      // An asynchronous backend can reject a frame after publishing its
+      // contents. Forget them: later frames clear rather than load.
+      if(frame_backend_->TakeContentsReset())native_metal_frame_->contents.clear();
+      return false;
+    }
     submit_done=tick();
     std::erase_if(next.contents,[&](const auto& view){return retained.contains(view.surface);});
     next.contents.insert(final.begin(),final.end());

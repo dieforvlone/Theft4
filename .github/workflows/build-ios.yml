@@ -83,6 +83,14 @@ jobs:
               -Iios/Theft4 -Iios/bridge $defines ios/Theft4/Theft4LauncherView.m
           done
           echo "Launcher compiles."
+          # Two-core rendering wrapper and its content prediction.
+          xcrun --sdk iphoneos clang++ -fsyntax-only -fobjc-arc -x objective-c++ -std=c++23 \
+            -target arm64-apple-ios26.0 -isysroot "$sdk" \
+            -Iios/bridge ios/bridge/theft4_async_frame_backend.mm
+          xcrun --sdk iphoneos clang++ -fsyntax-only -std=c++23 \
+            -target arm64-apple-ios26.0 -isysroot "$sdk" \
+            -Iios/bridge ios/bridge/theft4_frame_plan.cpp
+          echo "Two-core rendering wrapper compiles."
 
       - name: Free disk space
         run: |

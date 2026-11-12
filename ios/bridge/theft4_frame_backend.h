@@ -38,6 +38,11 @@ class FrameBackend {
   virtual bool Submit(std::shared_ptr<const FramePlan>,bool present,std::string& error,
                       SurfaceContents* published=nullptr)=0;
   virtual bool Drain(std::string& error)=0;
+  // True once after a rejected Submit when the caller's content journal may
+  // no longer match the backend (an asynchronous backend published contents
+  // for a frame that later failed). The caller then forgets its journal, so
+  // later frames clear instead of loading content that may not exist.
+  virtual bool TakeContentsReset(){return false;}
   virtual void Close()=0;
   // Explicit guest/validation readback only; never called by normal publication.
   virtual bool ReadRGBA8(const FramePlan&,SurfaceView,std::vector<uint8_t>&,
