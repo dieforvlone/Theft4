@@ -636,9 +636,6 @@ static BOOL Theft4InstallSaveExport(NSURL *selected, NSURL *support, NSURL *docu
 - (void)applyLowPowerPreset;
 - (void)applyLimitedMemoryCaps;
 - (void)applyOriginalGraphicsPreset;
-- (void)applyFrameSpeedGraphicsChoices;
-- (void)applyFrameSpeedGraphicsPreset;
-- (void)restorePreviousGraphicsPreset;
 #ifdef THEFT4_INTRO_TEST_BUILD
 - (void)runIntroTestImportSmokeIfRequested;
 #endif
@@ -955,28 +952,12 @@ static void bootEvent(void *context, const char *event) {
     }
     [self applyLimitedMemoryCaps];
     if (_fsrBoost.on) _enhancedOutput.on = YES;
+    // The Frame Speed preset was removed. Installs that were on it keep their
+    // last effective choices, now as an ordinary custom selection that is no
+    // longer reapplied over the user's changes at every launch.
     NSUserDefaults *speedDefaults = NSUserDefaults.standardUserDefaults;
-#ifdef THEFT4_DIRECT_METAL_DEFAULT
-    // One-time selection for this isolated Metal app. Preserve the previous
-    // graphics values rather than silently replacing the user's custom profile.
-    if (![speedDefaults boolForKey:@"Theft4FrameSpeedSelection107"]) {
-        NSArray *savedKeys = @[@"Theft4GraphicsPreset",@"Theft4LabRenderHeight",@"Theft4LabFSREnabled",
-            @"Theft4ShadowQuality",@"Theft4DrawDistance",@"Theft4ModelDetail",@"Theft4ReflectionQuality",
-            @"Theft4AntiAliasing",@"Theft4AnisotropicFiltering",@"Theft4MotionBlur",@"Theft4DepthOfField",
-            @"Theft4EnhancedOutput1080p",@"Theft4ExperimentalFSRBoost"];
-        NSMutableDictionary *previous = [NSMutableDictionary new];
-        for (NSString *key in savedKeys) {id value=[speedDefaults objectForKey:key];if(value)previous[key]=value;}
-        [speedDefaults setObject:previous forKey:@"Theft4PreviousGraphicsSettings107"];
-        [speedDefaults setObject:@"frame-speed" forKey:@"Theft4GraphicsPreset"];
-        [speedDefaults setBool:YES forKey:@"Theft4FrameSpeedSelection107"];
-    }
-#endif
-    const char *frameSpeedFirst = getenv("THEFT4_FRAME_SPEED_FIRST");
-    if ([[speedDefaults stringForKey:@"Theft4GraphicsPreset"] isEqualToString:@"frame-speed"] ||
-        (frameSpeedFirst && strcmp(frameSpeedFirst,"1")==0)) [self applyFrameSpeedGraphicsChoices];
-    [_bringupOverlay.frameSpeedButton addTarget:self action:@selector(applyFrameSpeedGraphicsPreset) forControlEvents:UIControlEventTouchUpInside];
-    [_bringupOverlay.restoreGraphicsButton addTarget:self action:@selector(restorePreviousGraphicsPreset) forControlEvents:UIControlEventTouchUpInside];
-    _bringupOverlay.restoreGraphicsButton.hidden = ![speedDefaults dictionaryForKey:@"Theft4PreviousGraphicsSettings107"];
+    if ([[speedDefaults stringForKey:@"Theft4GraphicsPreset"] isEqualToString:@"frame-speed"])
+        [speedDefaults setObject:@"custom" forKey:@"Theft4GraphicsPreset"];
     // Development probes remain disabled; user overlays and bounded captures
     // are independent opt-ins. Export remains available for previously saved logs.
     _bringupOverlay.restartButton.hidden = theft4_retail_mode();
@@ -1103,10 +1084,6 @@ static void bootEvent(void *context, const char *event) {
 
     if (!theft4_retail_mode() && diagnosticCapture && strcmp(diagnosticCapture, "1") == 0)
         [self record:@"diagnostic-test: long-performance-capture=armed"];
-    // Store the named profile's effective choices after all controls exist.
-    // This also makes normal icon launches match the visible configuration.
-    if ([[speedDefaults stringForKey:@"Theft4GraphicsPreset"] isEqualToString:@"frame-speed"])
-        [self displaySettingsChanged:nil];
     [self createCore];
 #ifdef THEFT4_INTRO_TEST_BUILD
     [self runIntroTestImportSmokeIfRequested];
@@ -2324,41 +2301,6 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     _fpsLastTime = CACurrentMediaTime();
 }
 
-- (void)applyFrameSpeedGraphicsChoices {
-    if (!_bringupOverlay.renderResolution || _executionAttempted) return;
-    // Keep the user-selected scene/output resolution. The reduced geometry
-    // profile was useful in the device run; resolution needs a separate A/B.
-    _antiAliasing.selectedSegmentIndex=0;_motionBlur.on=NO;_depthOfField.on=NO;_anisotropicFiltering.on=NO;
-    _bringupOverlay.sharpening.value=0;
-    _reflectionQuality.selectedSegmentIndex=0;_modelDetail.selectedSegmentIndex=0;
-    _shadowQuality.selectedSegmentIndex=1;_drawDistance.selectedSegmentIndex=0;_enhancedOutput.on=NO;_fsrBoost.on=NO;
-}
-
-- (void)applyFrameSpeedGraphicsPreset {
-    if (!_bringupOverlay.renderResolution || _executionAttempted) return;
-    [self applyFrameSpeedGraphicsChoices];[self displaySettingsChanged:nil];
-    [NSUserDefaults.standardUserDefaults setObject:@"frame-speed" forKey:@"Theft4GraphicsPreset"];
-}
-
-- (void)restorePreviousGraphicsPreset {
-    if (!_bringupOverlay.renderResolution || _executionAttempted) return;
-    NSUserDefaults *defaults=NSUserDefaults.standardUserDefaults;
-    NSDictionary *saved=[defaults dictionaryForKey:@"Theft4PreviousGraphicsSettings107"];if(!saved)return;
-    for(NSString *key in saved)[defaults setObject:saved[key] forKey:key];
-    NSArray<UISwitch *> *toggles=@[_anisotropicFiltering,_motionBlur,_depthOfField,_enhancedOutput,_fsrBoost];
-    NSArray *keys=@[@"Theft4AnisotropicFiltering",@"Theft4MotionBlur",@"Theft4DepthOfField",@"Theft4EnhancedOutput1080p",@"Theft4ExperimentalFSRBoost"];
-    for(NSUInteger i=0;i<toggles.count;++i)toggles[i].on=[defaults boolForKey:keys[i]];
-    NSArray<UISegmentedControl *> *choices=@[_shadowQuality,_drawDistance,_modelDetail,_reflectionQuality,_antiAliasing];
-    keys=@[@"Theft4ShadowQuality",@"Theft4DrawDistance",@"Theft4ModelDetail",@"Theft4ReflectionQuality",@"Theft4AntiAliasing"];
-    for(NSUInteger i=0;i<choices.count;++i)choices[i].selectedSegmentIndex=MAX(0,MIN(choices[i].numberOfSegments-1,[defaults integerForKey:keys[i]]));
-    uint32_t h=theft4_lab_render_height((uint32_t)[defaults integerForKey:@"Theft4LabRenderHeight"]);
-    _bringupOverlay.renderResolution.selectedSegmentIndex=h==540?0:h==900?2:h==1080?3:h==THEFT4_LAB_NATIVE_16_9?4:1;
-    _bringupOverlay.fsrUpscaling.on=[defaults boolForKey:@"Theft4LabFSREnabled"];
-    _bringupOverlay.sharpening.value=MAX(0,MIN(100,[defaults integerForKey:@"Theft4Sharpening"]));
-    [self displaySettingsChanged:nil];
-    [defaults setObject:saved[@"Theft4GraphicsPreset"] ?: @"custom" forKey:@"Theft4GraphicsPreset"];
-}
-
 - (void)applyOriginalGraphicsChoices {
     if (!_bringupOverlay.renderResolution || _executionAttempted) return;
     _bringupOverlay.renderResolution.selectedSegmentIndex = 1;
@@ -3434,8 +3376,6 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         _bringupOverlay.nativeAspect.enabled = NO;
         _bringupOverlay.godMode.enabled = NO;
         _bringupOverlay.unlimitedAmmo.enabled = NO;
-        _bringupOverlay.frameSpeedButton.enabled = NO;
-        _bringupOverlay.restoreGraphicsButton.enabled = NO;
         // This is a next-process setting, but users can still prepare the
         // comparison while viewing the in-game launcher. The saved choice is
         // applied only when a fresh game runtime is created after relaunch.

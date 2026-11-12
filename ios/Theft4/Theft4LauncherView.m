@@ -291,12 +291,6 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
                 toggle:_fsrUpscaling],
             _resolutionSummary
         ]];
-        _frameSpeedButton = Action(@"FRAME SPEED", NO);
-        _frameSpeedButton.accessibilityIdentifier = @"settings.frameSpeed";
-        _restoreGraphicsButton = Action(@"RESTORE PREVIOUS SETTINGS", NO);
-        _restoreGraphicsButton.accessibilityIdentifier = @"settings.restorePreviousGraphics";
-        [graphicsRows addObjectsFromArray:@[_frameSpeedButton,_restoreGraphicsButton,
-            Copy(@"Frame Speed keeps your resolution and uses original shadows, earlier resident mesh LOD and shorter draw distance, with edge filters, depth of field and motion blur off. Your selection is kept after reopening.",12,NO)]];
         _lowPowerButton = Action(@"AUTO OPTIMIZE", NO);
         _lowPowerButton.accessibilityIdentifier = @"settings.autoOptimize";
         _lowPowerButton.accessibilityLabel = @"Auto Optimize for this device";

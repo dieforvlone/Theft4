@@ -36,8 +36,6 @@
 @property(nonatomic, readonly) UISwitch *nativeAspect;
 @property(nonatomic, readonly) UISwitch *godMode;
 @property(nonatomic, readonly) UISwitch *unlimitedAmmo;
-@property(nonatomic, readonly) UIButton *frameSpeedButton;
-@property(nonatomic, readonly) UIButton *restoreGraphicsButton;
 #ifdef THEFT4_BC_TEXTURE_COMPATIBILITY
 @property(nonatomic, readonly) UISwitch *astcConversion;
 @property(nonatomic, readonly) UIButton *deleteTextureCacheButton;
