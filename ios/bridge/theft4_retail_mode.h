@@ -9,6 +9,14 @@ inline bool theft4_retail_mode() noexcept {
   static const bool enabled=[] {const char* v=getenv("THEFT4_RETAIL_MODE");return v&&strcmp(v,"1")==0;}();
   return enabled;
 }
+// True while the performance capture switch is recording (defined by the
+// native renderer; weak so tools without it still link).
+extern "C" __attribute__((weak)) bool rex_gta4_light_capture_active(void);
+// Detailed renderer timing: development launches, or a retail launch while a
+// performance capture is recording. Otherwise retail pays nothing for it.
+inline bool theft4_renderer_timing() noexcept {
+  return !theft4_retail_mode() || (rex_gta4_light_capture_active && rex_gta4_light_capture_active());
+}
 #else
 static inline bool theft4_retail_mode(void) {
   const char* v=getenv("THEFT4_RETAIL_MODE");return v&&strcmp(v,"1")==0;

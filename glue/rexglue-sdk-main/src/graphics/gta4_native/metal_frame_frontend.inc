@@ -1,3 +1,9 @@
+// Renderer timing lines: warnings in retail (the only level its log keeps),
+// so a performance capture records them; information otherwise.
+#ifndef THEFT4_METAL_TIMING_LOG
+#define THEFT4_METAL_TIMING_LOG(...) \
+  do { if (theft4_retail_mode()) REXLOG_WARN(__VA_ARGS__); else REXLOG_INFO(__VA_ARGS__); } while (0)
+#endif
 // Live CPU frame producer, included in graphics_system.cpp. This is deliberately
 // fail-closed while game draw/helper lowering is being connected: an unsupported
 // command rejects the WHOLE batch before Metal submits any of it.
@@ -201,6 +207,8 @@ bool Gta4NativeGraphicsSystem::PublishNativeMetalFrame(
     const std::shared_ptr<const EnvironmentalDataV1>& environmental_data,std::string& error,bool diagnostic_scan) {
   namespace r=theft4::render;
   const auto tick=[] {return theft4_retail_mode()&&!light::current?uint64_t(0):rex::chrono::Clock::QueryHostTickCount();};
+  // Development launches, or retail while a performance capture records.
+  const bool detailed=theft4_renderer_timing();
   const auto began=tick();uint64_t arena_done=began,retire_done=began,owners_done=began;
   uint64_t sweep_done=began,copy_done=began,lower_done=began,validate_done=began,submit_done=began;
   if(!frame_backend_){error="Metal backend missing";return false;}
@@ -217,13 +225,13 @@ bool Gta4NativeGraphicsSystem::PublishNativeMetalFrame(
   // Record after commit and destruction of the speculative state and temporary
   // plan. Registry retirement is frame work too, rather than invisible cleanup.
   const auto record_complete_budget=MakeScopeExit([&]{
-    if(theft4_retail_mode()||!frontend_complete||!present.device||diagnostic_scan)return;
+    if(!detailed||!frontend_complete||!present.device||diagnostic_scan)return;
     auto& state=*native_metal_frame_;
     state.frontend_ms[(state.timed_presents-1)%state.frontend_ms.size()]=
       double(tick()-began)*1000.0/double(rex::chrono::Clock::QueryHostTickFrequency());
     if(state.timed_presents%state.frontend_ms.size()==0){
       auto sorted=state.frontend_ms;std::sort(sorted.begin(),sorted.end());
-      REXLOG_INFO("gta4-metal-renderer-cpu-budget: samples=60 ceiling-ms=30 p50-ms={:.3f} p95-ms={:.3f} p99-ms={:.3f} max-ms={:.3f} over-budget={}",
+      THEFT4_METAL_TIMING_LOG("gta4-metal-renderer-cpu-budget: samples=60 ceiling-ms=30 p50-ms={:.3f} p95-ms={:.3f} p99-ms={:.3f} max-ms={:.3f} over-budget={}",
         sorted[29],sorted[56],sorted[59],sorted[59],std::count_if(sorted.begin(),sorted.end(),[](double ms){return ms>30;}));
     }
   });
@@ -232,7 +240,7 @@ bool Gta4NativeGraphicsSystem::PublishNativeMetalFrame(
   });
   const uint32_t frame_identity=native_metal_frame_->continuity.frame_identity;
   native_metal_frame_->draw_timing={};
-  native_metal_frame_->sample_draw_timing=!theft4_retail_mode()&&present.device&&native_metal_frame_->timed_presents%60==0;
+  native_metal_frame_->sample_draw_timing=detailed&&present.device&&native_metal_frame_->timed_presents%60==0;
   if(!native_metal_frame_->resource_admission)
     native_metal_frame_->resource_admission=std::make_unique<r::DrawResourceValidationCache>();
   native_metal_frame_->resource_admission->Clear();
@@ -1178,30 +1186,30 @@ bool Gta4NativeGraphicsSystem::PublishNativeMetalFrame(
   next.masked_constant_bytes_written=native_metal_frame_->masked_constant_bytes_written;
   next.masked_constant_full_bank_bytes=native_metal_frame_->masked_constant_full_bank_bytes;
   next.masked_constant_fallbacks=native_metal_frame_->masked_constant_fallbacks;
-  next.timed_presents=native_metal_frame_->timed_presents+(!theft4_retail_mode()&&present.device?1:0);
+  next.timed_presents=native_metal_frame_->timed_presents+(detailed&&present.device?1:0);
   next.frontend_ms=native_metal_frame_->frontend_ms;
-  if(!theft4_retail_mode()&&present.device&&next.timed_presents%60==1) {
+  if(detailed&&present.device&&next.timed_presents%60==1) {
     const double scale=1000.0/double(rex::chrono::Clock::QueryHostTickFrequency());
-    REXLOG_INFO("gta4-metal-maintenance-performance: present={} arena-ms={:.3f} retirement-ms={:.3f} owners-ms={:.3f} pressure-ms={:.3f} pressure-evictions={} pressure-before-bytes={} pressure-after-bytes={}",
+    THEFT4_METAL_TIMING_LOG("gta4-metal-maintenance-performance: present={} arena-ms={:.3f} retirement-ms={:.3f} owners-ms={:.3f} pressure-ms={:.3f} pressure-evictions={} pressure-before-bytes={} pressure-after-bytes={}",
       next.timed_presents,(arena_done-began)*scale,(retire_done-arena_done)*scale,
       (owners_done-retire_done)*scale,(sweep_done-owners_done)*scale,pressure_evictions,before_pressure,resident);
-    REXLOG_INFO("gta4-metal-frontend-performance: present={} total-ms={:.3f} sweep-ms={:.3f} journal-ms={:.3f} lower-ms={:.3f} validate-ms={:.3f} backend-ms={:.3f} finish-ms={:.3f} source-commands={} passes={} surfaces={} cached-buffers={} cached-images={} index-cache-hits={} index-scanned={} pipeline-hits={} pipeline-misses={} cached-samplers={}",
+    THEFT4_METAL_TIMING_LOG("gta4-metal-frontend-performance: present={} total-ms={:.3f} sweep-ms={:.3f} journal-ms={:.3f} lower-ms={:.3f} validate-ms={:.3f} backend-ms={:.3f} finish-ms={:.3f} source-commands={} passes={} surfaces={} cached-buffers={} cached-images={} index-cache-hits={} index-scanned={} pipeline-hits={} pipeline-misses={} cached-samplers={}",
       next.timed_presents,(tick()-began)*scale,(sweep_done-began)*scale,(copy_done-sweep_done)*scale,
       (lower_done-copy_done)*scale,(validate_done-lower_done)*scale,(submit_done-validate_done)*scale,
       (tick()-submit_done)*scale,current_frame_.size(),plan->commands.size(),plan->surfaces.size(),next.buffers.size(),next.images.size(),
       next.index_ranges.Hits(),next.index_ranges.ScannedIndices(),next.pipeline_hits,next.pipeline_misses,next.samplers.size());
     const auto& d=native_metal_frame_->draw_timing;
-    REXLOG_INFO("gta4-metal-draw-performance: present={} pipeline-ms={:.3f} constants-ms={:.3f} vertices-ms={:.3f} indices-ms={:.3f} fetches-ms={:.3f} validate-ms={:.3f}",
+    THEFT4_METAL_TIMING_LOG("gta4-metal-draw-performance: present={} pipeline-ms={:.3f} constants-ms={:.3f} vertices-ms={:.3f} indices-ms={:.3f} fetches-ms={:.3f} validate-ms={:.3f}",
       next.timed_presents,d.pipeline*scale,d.constants*scale,d.vertices*scale,d.indices*scale,d.fetches*scale,d.validate*scale);
-    REXLOG_INFO("gta4-metal-constant-performance: present={} projection-hits={} changed-version-hits={} unused-banks={} bytes-avoided={} masked-banks={} masked-bytes-written={} full-bank-bytes={} masked-fallbacks={}",
+    THEFT4_METAL_TIMING_LOG("gta4-metal-constant-performance: present={} projection-hits={} changed-version-hits={} unused-banks={} bytes-avoided={} masked-banks={} masked-bytes-written={} full-bank-bytes={} masked-fallbacks={}",
       next.timed_presents,next.projected_constants?next.projected_constants->hits:0,
       next.projected_constants?next.projected_constants->changed_version_hits:0,
       next.unused_constant_banks,next.constant_bytes_avoided,next.masked_constant_materializations,
       next.masked_constant_bytes_written,next.masked_constant_full_bank_bytes,next.masked_constant_fallbacks);
-    REXLOG_INFO("gta4-metal-lifetime-performance: present={} produced-generations={} pending-retirements={} retired-generations={} cpu-cache-bytes={} resource-checks={} resource-reuses={}",
+    THEFT4_METAL_TIMING_LOG("gta4-metal-lifetime-performance: present={} produced-generations={} pending-retirements={} retired-generations={} cpu-cache-bytes={} resource-checks={} resource-reuses={}",
       next.timed_presents,next.textures.size(),next.pending_texture_generations.size(),next.retired_texture_generations,
       next.buffers.bytes()+next.images.bytes(),next.resource_admission->checks,next.resource_admission->hits);
-    REXLOG_INFO("gta4-metal-constant-cache: present={} batch-packets={} batch-bytes={} geometry-packets={} geometry-bytes={} image-bytes={}",
+    THEFT4_METAL_TIMING_LOG("gta4-metal-constant-cache: present={} batch-packets={} batch-bytes={} geometry-packets={} geometry-bytes={} image-bytes={}",
       next.timed_presents,next.constant_packets.size(),next.constant_packets.bytes(),next.buffers.size(),next.buffers.bytes(),next.images.bytes());
   }
   // API-neutral saved CPU capture. Submission includes backend admission,
@@ -1212,8 +1220,8 @@ bool Gta4NativeGraphicsSystem::PublishNativeMetalFrame(
     light::Set(light::Finalization, tick()-submit_done);
     light::Set(light::DriverSubmit, submit_done-validate_done);
   }
-  if(!theft4_retail_mode()&&present.device&&next.timed_presents%60==1)
-    REXLOG_INFO("gta4-metal-allocation-performance: present={} registry-copies={} pooled-draws={} draw-pages={} recycled-draws={} fallback-draws={} draw-arena-bytes={}",
+  if(detailed&&present.device&&next.timed_presents%60==1)
+    THEFT4_METAL_TIMING_LOG("gta4-metal-allocation-performance: present={} registry-copies={} pooled-draws={} draw-pages={} recycled-draws={} fallback-draws={} draw-arena-bytes={}",
       next.timed_presents,next.surfaces.CopiedEntries()+next.textures.CopiedEntries(),next.draw_arena->pooled_objects,
       next.draw_arena->page_allocations,next.draw_arena->recycled_objects,next.draw_arena->fallback_objects,next.draw_arena->AllocatedBytes());
   next.surfaces.Commit();next.textures.Commit();registry_committed=true;

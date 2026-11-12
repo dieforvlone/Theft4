@@ -1,6 +1,7 @@
 #include "theft4_gta4_native_graphics.h"
 
 #include "theft4_metal_presenter.h"
+#include "theft4_retail_mode.h"
 
 #include <dispatch/dispatch.h>
 #include <pthread.h>
@@ -242,7 +243,9 @@ theft4_create_gta4_metal_graphics() {
   if(!layer){REXLOG_ERROR("Theft4 direct Metal renderer has no bound CAMetalLayer");return nullptr;}
   rex::cvar::SetFlagByName("gta4_native_vector_fonts","false");
   auto backend=theft4::metal::CreateFrameBackend(layer,theft4_metal_shader_library_directory(),2,
-      [](const char* message){REXLOG_INFO("{}",message);});
+      [](const char* message){
+        // Retail keeps a warnings-only log; capture timing must still reach it.
+        if(theft4_retail_mode())REXLOG_WARN("{}",message);else REXLOG_INFO("{}",message);});
   if(!backend||!backend->Capabilities().max_image_dimension_2d) {
     REXLOG_ERROR("Theft4 direct Metal renderer rejected the Apple GPU");return nullptr;
   }

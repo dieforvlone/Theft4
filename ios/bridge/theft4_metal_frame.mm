@@ -523,7 +523,7 @@ template<bool Diagnostics> Receipt FrameAdapter::SubmitFrameImpl(const std::shar
 }
 Receipt FrameAdapter::SubmitFrame(const std::shared_ptr<const render::FramePlan>& plan,
     render::SurfaceKey target,id<CAMetalDrawable> drawable,std::string& error,render::SurfaceContents* published,bool profile_gpu) {
-  return impl_->diagnostics ? SubmitFrameImpl<true>(plan,target,drawable,error,published,profile_gpu)
+  return (impl_->diagnostics||theft4_renderer_timing()) ? SubmitFrameImpl<true>(plan,target,drawable,error,published,profile_gpu)
                             : SubmitFrameImpl<false>(plan,target,drawable,error,published,profile_gpu);
 }
 id<MTLTexture> FrameAdapter::Output(const render::FramePlan& plan,std::string& error) {

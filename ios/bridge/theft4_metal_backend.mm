@@ -93,7 +93,7 @@ class Backend final:public render::FrameBackend {
       error="Metal publication requires a layer and final output";return false;
     }
     using Clock=std::chrono::steady_clock;
-    const bool diagnostics=!theft4_retail_mode();
+    const bool diagnostics=theft4_renderer_timing();
     const auto now=[&]{return diagnostics?Clock::now():Clock::time_point{};};
     const auto began=now();
     // Reap completed work and bound admission before acquiring a scarce drawable.
@@ -143,7 +143,7 @@ class Backend final:public render::FrameBackend {
         (unsigned long long)resources.resident_constant_bytes,(unsigned long long)resources.constant_evictions);
       if(diagnostic_)diagnostic_(message);else std::fprintf(stderr,"%s\n",message);
     }
-    if(!theft4_retail_mode()&&present&&++presentations_%60==1) {
+    if(diagnostics&&present&&++presentations_%60==1) {
       const auto& t=adapter_->LastTiming();const auto& e=t.encoder;
       const auto resources=adapter_->ImmutableStats();
       std::fprintf(stderr,"gta4-metal-upload-pages: present=%llu vm-allocations=%llu vm-reuses=%llu free-page-bytes=%llu buffer-extent-queries=%llu texture-shape-queries=%llu prepared-view-hits=%llu prepared-view-misses=%llu frame-buffer-creates=%llu frame-buffer-reuses=%llu frame-buffer-bytes=%llu interleaved-preparation=1\n",

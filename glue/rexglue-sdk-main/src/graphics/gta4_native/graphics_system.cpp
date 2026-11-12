@@ -769,6 +769,9 @@ extern "C" uint64_t rex_gta4_light_capture_start() {
   light::enabled.store(true, std::memory_order_release);
   return cursor;
 }
+extern "C" __attribute__((visibility("default"))) bool rex_gta4_light_capture_active(void) {
+  return light::enabled.load(std::memory_order_relaxed);
+}
 extern "C" void rex_gta4_light_memory_warning() { light::memory_warnings.fetch_add(1, std::memory_order_relaxed); }
 extern "C" void rex_gta4_light_capture_stop() {
   light::enabled.store(false, std::memory_order_release);
