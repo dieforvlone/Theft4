@@ -561,6 +561,8 @@ static BOOL Theft4InstallSaveExport(NSURL *selected, NSURL *support, NSURL *docu
     Theft4TouchControls *_touchControls;
     BOOL _gamePresentation;
     BOOL _launcherDuringGame;
+    UIButton *_gameMenuButton;
+    NSUInteger _gameMenuButtonGeneration;
     BOOL _legacyIPadProfile;
     BOOL _limitedMemoryProfile;
     NSURL *_gameURL;
@@ -996,6 +998,33 @@ static void bootEvent(void *context, const char *event) {
     gameMenuTap.numberOfTapsRequired = 1;
     gameMenuTap.cancelsTouchesInView = YES;
     [self.view addGestureRecognizer:gameMenuTap];
+    // A small menu button that fades out during play. Any single tap brings it
+    // back briefly; it never cancels or delays the touches the game receives.
+    _gameMenuButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    _gameMenuButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [_gameMenuButton setImage:[UIImage systemImageNamed:@"line.3.horizontal"]
+                     forState:UIControlStateNormal];
+    _gameMenuButton.tintColor = UIColor.whiteColor;
+    _gameMenuButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    _gameMenuButton.layer.cornerRadius = 22;
+    _gameMenuButton.accessibilityLabel = @"Game menu";
+    _gameMenuButton.accessibilityIdentifier = @"game.menu";
+    _gameMenuButton.alpha = 0;
+    _gameMenuButton.hidden = YES;
+    [_gameMenuButton addTarget:self action:@selector(presentGameMenu)
+              forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:_gameMenuButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [_gameMenuButton.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:10],
+        [_gameMenuButton.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12],
+        [_gameMenuButton.widthAnchor constraintEqualToConstant:44],
+        [_gameMenuButton.heightAnchor constraintEqualToConstant:44]]];
+    UITapGestureRecognizer *revealMenuTap = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(revealGameMenuButton)];
+    revealMenuTap.cancelsTouchesInView = NO;
+    revealMenuTap.delaysTouchesBegan = NO;
+    revealMenuTap.delaysTouchesEnded = NO;
+    [self.view addGestureRecognizer:revealMenuTap];
     _fpsLabel = [UILabel new];
     _fpsLabel.translatesAutoresizingMaskIntoConstraints = NO;
     _fpsLabel.text = @"--.- FPS";
@@ -2739,17 +2768,44 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     _touchControls.active = _showControls.on &&
         self.view.window.windowScene.activationState == UISceneActivationStateForegroundActive;
     [self updateFrameTimeHUD];
+    [self revealGameMenuButton];
     [self record:@"ui.game_presentation_mode"];
 }
 
+- (void)revealGameMenuButton {
+    if (!_gamePresentation || _launcherDuringGame || self.presentedViewController) return;
+    const NSUInteger generation = ++_gameMenuButtonGeneration;
+    [self.view bringSubviewToFront:_gameMenuButton];
+    _gameMenuButton.hidden = NO;
+    [UIView animateWithDuration:0.2 animations:^{ self->_gameMenuButton.alpha = 0.9; }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (generation != self->_gameMenuButtonGeneration) return;
+        [self hideGameMenuButton];
+    });
+}
+
+- (void)hideGameMenuButton {
+    ++_gameMenuButtonGeneration;
+    [UIView animateWithDuration:0.4 animations:^{ self->_gameMenuButton.alpha = 0; }
+                     completion:^(BOOL finished) {
+        if (finished && self->_gameMenuButton.alpha == 0) self->_gameMenuButton.hidden = YES;
+    }];
+}
+
 - (void)showInGameMenu:(UITapGestureRecognizer *)gesture {
-    if (gesture.state != UIGestureRecognizerStateRecognized || !_gamePresentation ||
-        _launcherDuringGame || self.presentedViewController) return;
-    // The recognizer cancels the three touches after recognition; release any
+    if (gesture.state != UIGestureRecognizerStateRecognized) return;
+    [self presentGameMenu];
+}
+
+- (void)presentGameMenu {
+    if (!_gamePresentation || _launcherDuringGame || self.presentedViewController) return;
+    [self hideGameMenuButton];
+    // A three-finger tap cancels its touches after recognition; release any
     // virtual buttons that may have been pressed while the tap was forming.
     [_touchControls releaseAllTouches];
     UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"GAME MENU"
-        message:@"Returning to the main menu ends this game session and closes Theft4. Reopen the app to change any graphics setting before a fresh launch. Save your progress first."
+        message:@"Exit to Launcher ends this game session and closes Theft4; tap the Theft4 icon to return to the launcher. Save your progress first."
         preferredStyle:UIAlertControllerStyleAlert];
     NSString *controlsTitle = _showControls.on ? @"Hide On-Screen Controls" : @"Show On-Screen Controls";
     [menu addAction:[UIAlertAction actionWithTitle:controlsTitle style:UIAlertActionStyleDefault
@@ -2759,7 +2815,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
             self->_touchControls.active = self->_sceneActive && self->_showControls.on;
             [self record:self->_showControls.on ? @"ui.touch_controls_shown" : @"ui.touch_controls_hidden"];
         }]];
-    [menu addAction:[UIAlertAction actionWithTitle:@"Quit Game · Reopen to Main Menu"
+    [menu addAction:[UIAlertAction actionWithTitle:@"Exit to Launcher (closes the app)"
         style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
             [self returnToLauncherDuringGame];
         }]];
