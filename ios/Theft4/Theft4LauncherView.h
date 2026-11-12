@@ -5,6 +5,9 @@
 @property(nonatomic, readonly) UILabel *statusLabel;
 @property(nonatomic, readonly) UILabel *detailLabel;
 @property(nonatomic, readonly) UIButton *startButton;
+// Which game to load: 0 = GTA IV (Documents/game), 1 = GTA IV: EFLC
+// (Documents/game_eflc). The controller owns the preference and switching.
+@property(nonatomic, readonly) UISegmentedControl *gameVersion;
 @property(nonatomic, readonly) UIButton *prepareButton;
 @property(nonatomic, readonly) UIButton *restartButton;
 @property(nonatomic, readonly) UISwitch *showCPUUsage;

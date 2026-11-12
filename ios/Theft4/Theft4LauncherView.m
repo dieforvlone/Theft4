@@ -230,10 +230,13 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
         [UIFont systemFontOfSize:31 weight:UIFontWeightSemibold]];
     _playHeadline.textColor = Ink(0xECE7D7);
     _playIntro = Copy(@"Cross the river. Take the long way home.\nYour next story starts on these streets.", 15, NO);
+    _gameVersion = ChoiceControl(@[@"GTA IV", @"GTA IV: EFLC"], @"gameVersion",
+        @"Game", @"Choose whether to load GTA IV or Episodes from Liberty City");
+    _gameVersion.selectedSegmentIndex = 0;
     _startButton = Action(@"ENTER LIBERTY CITY", YES);
     _startButton.accessibilityIdentifier = @"game.start";
-    _playSaveNote = Copy(@"Continue or begin a new story inside the game. Your saves stay with this app.", 12, NO);
-    _play = Column(@[_playHeadline, _playIntro, _startButton, _playSaveNote], 22);
+    _playSaveNote = Copy(@"Continue or begin a new story inside the game. Each game keeps its own saves in this app.", 12, NO);
+    _play = Column(@[_playHeadline, _playIntro, _gameVersion, _startButton, _playSaveNote], 22);
 
     _showCPUUsage = [UISwitch new];
     _showFrameTime = [UISwitch new];

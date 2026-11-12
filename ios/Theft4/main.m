@@ -115,6 +115,16 @@ static NSURL *Theft4GameDirectoryURL(NSURL *documents) {
 #endif
 }
 
+// GTA IV: Episodes from Liberty City runs GTA IV's program against the
+// Episodes disc's own game data (its common/xbox360/audio archives carry the
+// episode world changes), so it needs a separate, complete game folder.
+static NSURL *Theft4EFLCGameDirectoryURL(NSURL *documents) {
+    return [documents URLByAppendingPathComponent:@"game_eflc" isDirectory:YES];
+}
+
+static NSString *const Theft4GameVersionDefaultsKey = @"Theft4GameVersion";
+enum { Theft4GameVersionGTAIV = 0, Theft4GameVersionEFLC = 1 };
+
 static NSURL *Theft4InstructionsURL(NSURL *documents) {
 #ifdef THEFT4_INTRO_TEST_BUILD
     NSURL *testRoot = [documents URLByAppendingPathComponent:@"intro-test" isDirectory:YES];
@@ -554,6 +564,7 @@ static BOOL Theft4InstallSaveExport(NSURL *selected, NSURL *support, NSURL *docu
     BOOL _legacyIPadProfile;
     BOOL _limitedMemoryProfile;
     NSURL *_gameURL;
+    NSURL *_applicationSupportURL;
     UIView *_installationOverlay;
     UILabel *_installationTitle;
     UILabel *_installationDetail;
@@ -860,6 +871,8 @@ static void bootEvent(void *context, const char *event) {
                  forControlEvents:UIControlEventTouchUpInside];
     [_importSavesButton addTarget:self action:@selector(importSavesFromFiles)
                  forControlEvents:UIControlEventTouchUpInside];
+    [_bringupOverlay.gameVersion addTarget:self action:@selector(gameVersionChanged:)
+                          forControlEvents:UIControlEventValueChanged];
     _installEpisodesButton = _bringupOverlay.installEpisodesButton;
     _episodesStatusLabel = _bringupOverlay.episodesStatusLabel;
     [_installEpisodesButton addTarget:self action:@selector(installEpisodesFromFiles)
@@ -1037,6 +1050,7 @@ static void bootEvent(void *context, const char *event) {
     NSError *error = nil;
     NSURL *support = [NSFileManager.defaultManager URLForDirectory:NSApplicationSupportDirectory
         inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:&error];
+    _applicationSupportURL = support;
     _supportURL = [support URLByAppendingPathComponent:@"Theft4" isDirectory:YES];
     [self refreshEpisodeStatus];
     if (!_supportURL || ![NSFileManager.defaultManager createDirectoryAtURL:_supportURL
@@ -1055,6 +1069,7 @@ static void bootEvent(void *context, const char *event) {
         }
     }
     [self initializeSharedGameDirectory];
+    [self applyStoredGameVersion];
     [self record:@"app.probe_loaded"];
 
     if (!theft4_retail_mode() && diagnosticCapture && strcmp(diagnosticCapture, "1") == 0)
@@ -1669,6 +1684,88 @@ static void bootEvent(void *context, const char *event) {
     });
 }
 #endif
+
+// Switches the folders the launcher prepares and starts: the game data and
+// the per-game Application Support root (saves, caches, logs, prepared
+// textures). GTA IV keeps the original locations; EFLC uses game_eflc and
+// Theft4-EFLC so the two games never share saves or caches.
+- (BOOL)switchToGameVersion:(NSInteger)version reason:(NSString **)reason {
+    NSURL *documents = [NSFileManager.defaultManager URLForDirectory:NSDocumentDirectory
+        inDomain:NSUserDomainMask appropriateForURL:nil create:NO error:nil];
+    if (!documents || !_applicationSupportURL) {
+        if (reason) *reason = @"The app's folders are unavailable.";
+        return NO;
+    }
+    const BOOL eflc = version == Theft4GameVersionEFLC;
+    NSURL *game = eflc ? Theft4EFLCGameDirectoryURL(documents) : Theft4GameDirectoryURL(documents);
+    NSURL *support = [_applicationSupportURL URLByAppendingPathComponent:
+        eflc ? @"Theft4-EFLC" : @"Theft4" isDirectory:YES];
+    if (eflc) {
+        if (![NSFileManager.defaultManager fileExistsAtPath:
+                [[game URLByAppendingPathComponent:@"default.xex"] path]]) {
+            if (reason) *reason = @"Copy the contents of your extracted Episodes from Liberty City disc "
+                @"into Files → Theft4 → game_eflc (everything except its default.xex). Then add GTA IV's "
+                @"default.xex, default.xexp and update folder from your game folder.";
+            return NO;
+        }
+#ifdef THEFT4_HAS_GAME_LOADER
+        char message[1024] = {};
+        if (theft4_validate_installed_game(game.fileSystemRepresentation, message,
+                sizeof(message)) != 0) {
+            if (reason) *reason = [NSString stringWithFormat:
+                @"game_eflc needs GTA IV's default.xex, default.xexp and update folder: %s", message];
+            return NO;
+        }
+#endif
+    }
+    NSError *error = nil;
+    if (![NSFileManager.defaultManager createDirectoryAtURL:support
+            withIntermediateDirectories:YES attributes:nil error:&error]) {
+        if (reason) *reason = error.localizedDescription ?: @"Application Support is unavailable.";
+        return NO;
+    }
+    _gameURL = game;
+    _supportURL = support;
+    _setupValidated = NO;
+    _baseGameChecked = NO;
+    _bringupOverlay.gameVersion.selectedSegmentIndex = eflc ? 1 : 0;
+    [self refreshEpisodeStatus];
+    [self completeSetupForInstalledGame];
+    [self record:eflc ? @"game.version_eflc" : @"game.version_gta4"];
+    [self refresh];
+    return YES;
+}
+
+- (void)applyStoredGameVersion {
+    const NSInteger stored = [NSUserDefaults.standardUserDefaults
+        integerForKey:Theft4GameVersionDefaultsKey];
+    _bringupOverlay.gameVersion.selectedSegmentIndex = 0;
+    if (stored != Theft4GameVersionEFLC || _failure) return;
+    // A missing or incomplete EFLC folder falls back to GTA IV silently.
+    if (![self switchToGameVersion:Theft4GameVersionEFLC reason:NULL])
+        [NSUserDefaults.standardUserDefaults setInteger:Theft4GameVersionGTAIV
+                                                 forKey:Theft4GameVersionDefaultsKey];
+}
+
+- (void)gameVersionChanged:(UISegmentedControl *)control {
+    const NSInteger requested = control.selectedSegmentIndex;
+    const NSInteger current = [NSUserDefaults.standardUserDefaults
+        integerForKey:Theft4GameVersionDefaultsKey] == Theft4GameVersionEFLC ? 1 : 0;
+    if (requested == current) return;
+    if (_loading || _executionAttempted || _gamePresentation || _saveTransferBusy) {
+        control.selectedSegmentIndex = current;
+        [self showSaveMessage:@"CLOSE THE GAME FIRST"
+                     detail:@"Quit and reopen Theft4 to switch between GTA IV and GTA IV: EFLC."];
+        return;
+    }
+    NSString *reason = nil;
+    if (![self switchToGameVersion:requested reason:&reason]) {
+        control.selectedSegmentIndex = current;
+        [self showSaveMessage:@"GTA IV: EFLC IS NOT SET UP" detail:reason ?: @"The game folder is not ready."];
+        return;
+    }
+    [NSUserDefaults.standardUserDefaults setInteger:requested forKey:Theft4GameVersionDefaultsKey];
+}
 
 - (void)showSaveMessage:(NSString *)title detail:(NSString *)detail {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
