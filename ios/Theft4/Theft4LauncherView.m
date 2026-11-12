@@ -32,7 +32,7 @@ static UILabel *Copy(NSString *text, CGFloat size, BOOL mono) {
         : [UIFont systemFontOfSize:size weight:UIFontWeightRegular];
     label.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleBody] scaledFontForFont:font];
     label.adjustsFontForContentSizeCategory = YES;
-    label.textColor = Ink(0xABB7B5);
+    label.textColor = [UIColor colorWithWhite:1 alpha:.72];
     return label;
 }
 
@@ -43,20 +43,62 @@ static UIStackView *Column(NSArray<UIView *> *views, CGFloat spacing) {
     return stack;
 }
 
+// Liquid Glass surface (iOS 26). The animated city behind it shows through.
+static UIVisualEffectView *GlassView(CGFloat radius) {
+    UIGlassEffect *effect = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
+    UIVisualEffectView *view = [[UIVisualEffectView alloc] initWithEffect:effect];
+    view.layer.cornerRadius = radius;
+    view.layer.cornerCurve = kCACornerCurveContinuous;
+    view.clipsToBounds = YES;
+    return view;
+}
+
+static UIVisualEffectView *GlassCard(UIView *content, CGFloat radius, CGFloat padding) {
+    UIVisualEffectView *card = GlassView(radius);
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [card.contentView addSubview:content];
+    [NSLayoutConstraint activateConstraints:@[
+        [content.topAnchor constraintEqualToAnchor:card.contentView.topAnchor constant:padding],
+        [content.bottomAnchor constraintEqualToAnchor:card.contentView.bottomAnchor constant:-padding],
+        [content.leadingAnchor constraintEqualToAnchor:card.contentView.leadingAnchor constant:padding],
+        [content.trailingAnchor constraintEqualToAnchor:card.contentView.trailingAnchor constant:-padding]
+    ]];
+    return card;
+}
+
+static UILabel *Heading(NSString *text, CGFloat size, UIFontWeight weight) {
+    UILabel *label = [UILabel new];
+    label.text = text;
+    label.numberOfLines = 0;
+    label.font = [UIFontMetrics.defaultMetrics scaledFontForFont:[UIFont systemFontOfSize:size weight:weight]];
+    label.adjustsFontForContentSizeCategory = YES;
+    label.textColor = UIColor.whiteColor;
+    return label;
+}
+
 static UIButton *Action(NSString *title, BOOL primary) {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
-    UIButtonConfiguration *config = [UIButtonConfiguration plainButtonConfiguration];
+    UIButtonConfiguration *config = primary
+        ? [UIButtonConfiguration prominentGlassButtonConfiguration]
+        : [UIButtonConfiguration glassButtonConfiguration];
     config.title = title;
-    config.cornerStyle = UIButtonConfigurationCornerStyleFixed;
-    config.background.cornerRadius = 3;
-    config.baseForegroundColor = primary ? Ink(0x111B1D) : Ink(0xE5DECA);
-    config.background.backgroundColor = primary ? Ink(0xE6B56B) : Ink(0x243236);
-    config.contentInsets = NSDirectionalEdgeInsetsMake(17, 18, 17, 18);
+    config.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+    config.baseForegroundColor = primary ? Ink(0x10191B) : UIColor.whiteColor;
+    config.contentInsets = NSDirectionalEdgeInsetsMake(17, 22, 17, 22);
     config.image = [UIImage systemImageNamed:primary ? @"play.fill" : @"arrow.right"];
-    config.imagePlacement = NSDirectionalRectEdgeTrailing;
-    config.imagePadding = 18;
+    config.imagePlacement = primary ? NSDirectionalRectEdgeLeading : NSDirectionalRectEdgeTrailing;
+    config.imagePadding = primary ? 14 : 18;
+    if (primary) {
+        config.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *attributes) {
+            NSMutableDictionary *updated = [attributes mutableCopy];
+            updated[NSFontAttributeName] = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
+            return updated;
+        };
+    }
     button.configuration = config;
-    button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+    button.tintColor = primary ? [UIColor colorWithWhite:1 alpha:.88] : UIColor.whiteColor;
+    button.contentHorizontalAlignment = primary ? UIControlContentHorizontalAlignmentCenter
+                                                : UIControlContentHorizontalAlignmentLeading;
     [button.heightAnchor constraintGreaterThanOrEqualToConstant:56].active = YES;
     return button;
 }
@@ -64,8 +106,8 @@ static UIButton *Action(NSString *title, BOOL primary) {
 static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *identifier,
                                          NSString *label, NSString *hint) {
     UISegmentedControl *control = [[UISegmentedControl alloc] initWithItems:items];
-    control.selectedSegmentTintColor = Ink(0xC99755);
-    control.backgroundColor = Ink(0x172326);
+    control.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:.30];
+    control.backgroundColor = [UIColor colorWithWhite:1 alpha:.08];
     const BOOL phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
     if (phone) {
         for (NSUInteger i = 0; i < control.numberOfSegments; ++i) {
@@ -76,8 +118,8 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     NSDictionary *font = phone ? @{NSFontAttributeName:
         [[UIFontMetrics metricsForTextStyle:UIFontTextStyleCaption1] scaledFontForFont:
             [UIFont systemFontOfSize:11 weight:UIFontWeightMedium]]} : @{};
-    NSMutableDictionary *normal = [font mutableCopy]; normal[NSForegroundColorAttributeName] = Ink(0xD9D5C7);
-    NSMutableDictionary *selected = [font mutableCopy]; selected[NSForegroundColorAttributeName] = Ink(0x10191B);
+    NSMutableDictionary *normal = [font mutableCopy]; normal[NSForegroundColorAttributeName] = [UIColor colorWithWhite:1 alpha:.72];
+    NSMutableDictionary *selected = [font mutableCopy]; selected[NSForegroundColorAttributeName] = UIColor.whiteColor;
     [control setTitleTextAttributes:normal
                            forState:UIControlStateNormal];
     [control setTitleTextAttributes:selected
@@ -108,6 +150,13 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     BOOL _active, _retired, _portraitMenu, _landscapePhoneMenu;
     NSArray<NSArray<UIView *> *> *_phonePageItems;
     NSInteger _phoneColumns;
+    BOOL _styled;
+    UILabel *_subtitle, *_playEyebrow;
+    UIVisualEffectView *_tabGlass, *_heroCard;
+    UIStackView *_playSide;
+    NSLayoutConstraint *_heroWidth;
+    UISwitch *_quickFSR, *_quickFPS, *_quickTouch;
+    UIButton *_quickResolution;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -121,10 +170,10 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     _atmosphere.userInteractionEnabled = NO;
     [self addSubview:_atmosphere];
     _shade = [CAGradientLayer layer];
-    _shade.colors = @[(id)Ink(0x081115).CGColor,
-                      (id)[Ink(0x081115) colorWithAlphaComponent:.94].CGColor,
-                      (id)[Ink(0x081115) colorWithAlphaComponent:.18].CGColor,
-                      (id)[Ink(0x081115) colorWithAlphaComponent:.02].CGColor];
+    _shade.colors = @[(id)[Ink(0x081115) colorWithAlphaComponent:.55].CGColor,
+                      (id)[Ink(0x081115) colorWithAlphaComponent:.42].CGColor,
+                      (id)[Ink(0x081115) colorWithAlphaComponent:.22].CGColor,
+                      (id)[Ink(0x081115) colorWithAlphaComponent:.12].CGColor];
     _shade.locations = @[@0, @.28, @.68, @1];
     _shade.startPoint = CGPointMake(0, .5);
     _shade.endPoint = CGPointMake(1, .5);
@@ -151,13 +200,18 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     _rain.emitterCells = @[rain];
     [_atmosphere.layer addSublayer:_rain];
 
-    _masthead = Copy(@"T H E F T 4   /   LIBERTY CITY", 11, YES);
-    _masthead.textColor = Ink(0xE5DECA);
+    _masthead = Heading(@"Liberty City Launcher", 26, UIFontWeightSemibold);
+    _masthead.numberOfLines = 1;
+    _masthead.adjustsFontSizeToFitWidth = YES;
+    _masthead.minimumScaleFactor = .7;
     [self addSubview:_masthead];
+    _subtitle = Copy(@"GTA IV for iOS", 15, NO);
+    _subtitle.numberOfLines = 1;
+    [self addSubview:_subtitle];
     BOOL lab = [NSBundle.mainBundle.infoDictionary[@"Theft4LabBuild"] boolValue];
     NSString *version = NSBundle.mainBundle.infoDictionary[@"Theft4ReleaseName"] ?: @"0.3";
     NSString *build = NSBundle.mainBundle.infoDictionary[@"CFBundleVersion"] ?: @"0";
-    _edition = Copy([NSString stringWithFormat:@"AFTER HOURS   /   v%@ (%@)", version, build], 11, YES);
+    _edition = Copy([NSString stringWithFormat:@"v%@ (%@)", version, build], 12, YES);
     _edition.textAlignment = NSTextAlignmentRight;
     [self addSubview:_edition];
     _topRule = [UIView new];
@@ -168,11 +222,10 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     [self addSubview:_bottomRule];
 
     _menuPanel = [UIView new];
-    _menuPanel.backgroundColor = [Ink(0x091316) colorWithAlphaComponent:.88];
-    _menuPanel.layer.borderColor = [Ink(0xABB7B5) colorWithAlphaComponent:.15].CGColor;
-    _menuPanel.layer.borderWidth = 1;
-    _menuPanel.layer.cornerRadius = 4;
+    _menuPanel.backgroundColor = UIColor.clearColor;
     [self addSubview:_menuPanel];
+    _tabGlass = GlassView(30);
+    [_menuPanel addSubview:_tabGlass];
 
     _wordmark = Copy(@"THEFT4", 67, NO);
     _wordmark.font = [UIFont fontWithName:@"HelveticaNeue-CondensedBlack" size:67]
@@ -185,8 +238,8 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     [_menuPanel addSubview:_wordmark];
 
     NSMutableArray<UIButton *> *tabs = [NSMutableArray new];
-    NSArray<NSString *> *names = @[@"PLAY", @"GRAPHICS", @"INTERFACE", @"SYSTEM", @"MODS"];
-    NSArray<NSString *> *symbols = @[@"play.fill", @"slider.horizontal.3", @"rectangle.on.rectangle", @"wrench.and.screwdriver", @"puzzlepiece.extension"];
+    NSArray<NSString *> *names = @[@"Play", @"Graphics", @"Interface", @"System", @"Mods"];
+    NSArray<NSString *> *symbols = @[@"play.fill", @"slider.horizontal.3", @"rectangle.on.rectangle", @"gearshape", @"puzzlepiece.extension"];
     for (NSInteger i = 0; i < names.count; ++i) {
         UIButton *tab = [UIButton buttonWithType:UIButtonTypeSystem];
         tab.tag = i;
@@ -197,11 +250,12 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
         config.contentInsets = NSDirectionalEdgeInsetsMake(13, 12, 13, 12);
         config.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *attributes) {
             NSMutableDictionary *updated = [attributes mutableCopy];
-            updated[NSFontAttributeName] = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightBold];
+            updated[NSFontAttributeName] = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
             return updated;
         };
+        config.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
         tab.configuration = config;
-        tab.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+        tab.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
         [tab.heightAnchor constraintGreaterThanOrEqualToConstant:48].active = YES;
         [tab addTarget:self action:@selector(selectTab:) forControlEvents:UIControlEventTouchUpInside];
         tab.accessibilityIdentifier = [@"launcher.tab." stringByAppendingFormat:@"%ld", (long)i];
@@ -209,8 +263,9 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     }
     _tabs = tabs;
     _navigation = [[UIStackView alloc] initWithArrangedSubviews:tabs];
-    _navigation.axis = UILayoutConstraintAxisVertical;
-    _navigation.spacing = 5;
+    _navigation.axis = UILayoutConstraintAxisHorizontal;
+    _navigation.distribution = UIStackViewDistributionFillEqually;
+    _navigation.spacing = 4;
     _navigationScroll = [UIScrollView new];
     _navigationScroll.showsVerticalScrollIndicator = NO;
     [_navigationScroll addSubview:_navigation];
@@ -225,18 +280,19 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     [_menuPanel addSubview:_pageTitle];
     [_menuPanel addSubview:_pageDetail];
 
-    _playHeadline = Copy(@"One more night\nin Liberty City.", 31, NO);
-    _playHeadline.font = [UIFontMetrics.defaultMetrics scaledFontForFont:
-        [UIFont systemFontOfSize:31 weight:UIFontWeightSemibold]];
-    _playHeadline.textColor = Ink(0xECE7D7);
-    _playIntro = Copy(@"Cross the river. Take the long way home.\nYour next story starts on these streets.", 15, NO);
+    _playEyebrow = Copy(@"GTA IV", 14, NO);
+    _playEyebrow.font = [UIFontMetrics.defaultMetrics scaledFontForFont:
+        [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]];
+    _playHeadline = Heading(@"Return to\nLiberty City.", 40, UIFontWeightBold);
+    _playIntro = Copy(@"", 16, NO);
     _gameVersion = ChoiceControl(@[@"GTA IV", @"GTA: EFLC"], @"gameVersion",
         @"Game", @"Choose whether to load GTA IV or Episodes from Liberty City");
     _gameVersion.selectedSegmentIndex = 0;
-    _startButton = Action(@"ENTER LIBERTY CITY", YES);
+    _startButton = Action(@"Enter Liberty City", YES);
+    [_gameVersion addTarget:self action:@selector(refreshGameVersion)
+           forControlEvents:UIControlEventValueChanged];
     _startButton.accessibilityIdentifier = @"game.start";
     _playSaveNote = Copy(@"Continue or begin a new story inside the game. Each game keeps its own saves in this app.", 12, NO);
-    _play = Column(@[_playHeadline, _playIntro, _gameVersion, _startButton, _playSaveNote], 22);
 
     _showCPUUsage = [UISwitch new];
     _showFrameTime = [UISwitch new];
@@ -503,6 +559,83 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
         Copy(@"Applies when you press Play in a fresh app session. To change it after playing, save, close Theft4 and reopen. Your original game files and saves are kept.", 12, NO)
     ], 16);
 
+    // --- Play page: hero card, Quick Settings and Game Files glass cards ---
+    UIStackView *hero = Column(@[_playEyebrow, _playHeadline, _playIntro, _gameVersion,
+                                 _startButton, _playSaveNote], 18);
+    [hero setCustomSpacing:8 afterView:_playEyebrow];
+    [hero setCustomSpacing:24 afterView:_playIntro];
+    _heroCard = GlassCard(hero, 32, 28);
+
+    NSMutableArray<UIView *> *quickRows = [NSMutableArray arrayWithObject:
+        Heading(@"Quick Settings", 22, UIFontWeightSemibold)];
+    if (_renderResolution) {
+        _quickResolution = [UIButton buttonWithType:UIButtonTypeSystem];
+        UIButtonConfiguration *config = [UIButtonConfiguration glassButtonConfiguration];
+        config.image = [UIImage systemImageNamed:@"chevron.down"];
+        config.imagePlacement = NSDirectionalRectEdgeTrailing;
+        config.imagePadding = 6;
+        config.preferredSymbolConfigurationForImage =
+            [UIImageSymbolConfiguration configurationWithPointSize:11 weight:UIImageSymbolWeightSemibold];
+        config.baseForegroundColor = UIColor.whiteColor;
+        _quickResolution.configuration = config;
+        _quickResolution.showsMenuAsPrimaryAction = YES;
+        NSMutableArray<UIMenuElement *> *choices = [NSMutableArray new];
+        for (NSInteger i = 0; i < _renderResolution.numberOfSegments; ++i) {
+            __weak typeof(self) weakSelf = self;
+            [choices addObject:[UIAction actionWithTitle:[_renderResolution titleForSegmentAtIndex:i]
+                image:nil identifier:nil handler:^(__unused UIAction *action) {
+                    [weakSelf quickResolutionSelected:i];
+                }]];
+        }
+        _quickResolution.menu = [UIMenu menuWithChildren:choices];
+        _quickResolution.accessibilityLabel = @"Internal resolution";
+        [quickRows addObject:[self quickRow:@"display" title:@"Internal Resolution"
+                                  accessory:_quickResolution]];
+    }
+    _quickFPS = [UISwitch new];
+    _quickTouch = [UISwitch new];
+    if (_fsrUpscaling) {
+        _quickFSR = [UISwitch new];
+        [quickRows addObject:[self quickRow:@"dot.radiowaves.left.and.right" title:@"FSR Upscaling"
+                                  accessory:_quickFSR]];
+    }
+    [quickRows addObject:[self quickRow:@"speedometer" title:@"Frame Counter" accessory:_quickFPS]];
+    [quickRows addObject:[self quickRow:@"hand.point.up.left" title:@"Touch Controls" accessory:_quickTouch]];
+    for (UISwitch *toggle in @[_quickFPS, _quickTouch]) {
+        [toggle addTarget:self action:@selector(quickSwitchChanged:)
+         forControlEvents:UIControlEventValueChanged];
+    }
+    [_quickFSR addTarget:self action:@selector(quickSwitchChanged:)
+        forControlEvents:UIControlEventValueChanged];
+    UIVisualEffectView *quickCard = GlassCard(Column(quickRows, 14), 28, 22);
+
+    _statusLabel = Copy(@"Core ready", 13, NO);
+    _statusLabel.accessibilityIdentifier = @"core.status";
+    _statusLabel.numberOfLines = 3;
+    UIImageView *driveIcon = [[UIImageView alloc] initWithImage:
+        [UIImage systemImageNamed:@"externaldrive"]];
+    driveIcon.tintColor = UIColor.whiteColor;
+    driveIcon.contentMode = UIViewContentModeScaleAspectFit;
+    [driveIcon.widthAnchor constraintEqualToConstant:30].active = YES;
+    UIImageView *chevron = [[UIImageView alloc] initWithImage:
+        [UIImage systemImageNamed:@"chevron.right"]];
+    chevron.tintColor = [UIColor colorWithWhite:1 alpha:.7];
+    [chevron setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    UIStackView *filesText = Column(@[Heading(@"Game Files", 19, UIFontWeightSemibold), _statusLabel], 4);
+    UIStackView *filesRow = [[UIStackView alloc] initWithArrangedSubviews:@[driveIcon, filesText, chevron]];
+    filesRow.alignment = UIStackViewAlignmentCenter;
+    filesRow.spacing = 14;
+    UIVisualEffectView *filesCard = GlassCard(filesRow, 28, 20);
+    [filesCard addGestureRecognizer:[[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(showGameFiles)]];
+    filesCard.accessibilityLabel = @"Game files";
+    filesCard.accessibilityHint = @"Opens the System page";
+
+    _playSide = Column(@[quickCard, filesCard], 16);
+    _play = [[UIStackView alloc] initWithArrangedSubviews:@[_heroCard, _playSide]];
+    _play.spacing = 16;
+    _heroWidth = [_heroCard.widthAnchor constraintEqualToAnchor:_play.widthAnchor multiplier:.56];
+
     _pages = @[_play, _graphics, _interfacePage, _system, _mods];
     if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone) {
         // A compact mod gallery replaces the full-width, oversized screenshot.
@@ -544,23 +677,9 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
                 if ([view isKindOfClass:UILabel.class]) {
                     [items addObject:view]; continue;
                 }
-                UIView *card = [UIView new];
-                card.backgroundColor = [Ink(0x172326) colorWithAlphaComponent:.94];
-                card.layer.cornerRadius = 12;
-                card.layer.borderWidth = 0.5;
-                card.layer.borderColor = [Ink(0xABB7B5) colorWithAlphaComponent:.16].CGColor;
                 UIView *spacer = [UIView new];
                 [spacer.heightAnchor constraintGreaterThanOrEqualToConstant:0].active = YES;
-                UIStackView *body = Column(@[view, spacer], 0);
-                body.translatesAutoresizingMaskIntoConstraints = NO;
-                [card addSubview:body];
-                [NSLayoutConstraint activateConstraints:@[
-                    [body.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
-                    [body.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-12],
-                    [body.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
-                    [body.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12]
-                ]];
-                [items addObject:card];
+                [items addObject:GlassCard(Column(@[view, spacer], 0), 22, 14)];
             }
             page.spacing = 12; [pages addObject:items];
         }
@@ -585,10 +704,6 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     _controllerHint = Copy(@"D-PAD  NAVIGATE     A  SELECT", 10, YES);
     _controllerHint.textColor = Ink(0xE5DECA);
     [_menuPanel addSubview:_controllerHint];
-    _statusLabel = Copy(@"Core ready", 12, YES);
-    _statusLabel.accessibilityIdentifier = @"core.status";
-    _statusLabel.numberOfLines = 2;
-    [self addSubview:_statusLabel];
     _configuration = Copy(@"", 10, YES);
     _configuration.textAlignment = NSTextAlignmentRight;
     [self addSubview:_configuration];
@@ -596,11 +711,78 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     _sceneCaption.textAlignment = NSTextAlignmentRight;
     [self addSubview:_sceneCaption];
 
+    [self refreshGameVersion];
     [self selectTab:_tabs[0]];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(motionChanged:)
         name:UIAccessibilityReduceMotionStatusDidChangeNotification object:nil];
     [self setActive:YES];
     return self;
+}
+
+- (UIView *)quickRow:(NSString *)symbol title:(NSString *)title accessory:(UIView *)accessory {
+    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol]];
+    icon.tintColor = UIColor.whiteColor;
+    icon.contentMode = UIViewContentModeScaleAspectFit;
+    [icon.widthAnchor constraintEqualToConstant:26].active = YES;
+    UILabel *label = Copy(title, 16, NO);
+    label.textColor = UIColor.whiteColor;
+    [accessory setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [accessory setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                               forAxis:UILayoutConstraintAxisHorizontal];
+    if ([accessory isKindOfClass:UISwitch.class]) {
+        ((UISwitch *)accessory).accessibilityLabel = title;
+    }
+    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[icon, label, accessory]];
+    row.alignment = UIStackViewAlignmentCenter;
+    row.spacing = 14;
+    [row.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+    return row;
+}
+
+// Quick Settings mirror controls that live on the Graphics and Interface
+// pages; changes are forwarded to those controls so the controller saves them.
+- (void)syncQuickSettings {
+    _quickFPS.on = _showFPS.on;
+    _quickTouch.on = _showControls.on;
+    if (_quickFSR) {
+        _quickFSR.on = _fsrUpscaling.on;
+        _quickFSR.enabled = _fsrUpscaling.enabled;
+    }
+    if (_quickResolution) {
+        UIButtonConfiguration *config = _quickResolution.configuration;
+        const NSInteger index = _renderResolution.selectedSegmentIndex;
+        config.title = index >= 0 ? [_renderResolution titleForSegmentAtIndex:index] : @"—";
+        _quickResolution.configuration = config;
+    }
+}
+
+- (void)quickSwitchChanged:(UISwitch *)sender {
+    UISwitch *target = sender == _quickFPS ? _showFPS
+        : sender == _quickTouch ? _showControls : _fsrUpscaling;
+    if (!target || !target.enabled) { [self syncQuickSettings]; return; }
+    target.on = sender.on;
+    [target sendActionsForControlEvents:UIControlEventValueChanged];
+    [self refreshConfigurationSummary];
+}
+
+- (void)quickResolutionSelected:(NSInteger)index {
+    if (!_renderResolution || !_renderResolution.enabled) return;
+    _renderResolution.selectedSegmentIndex = index;
+    [_renderResolution sendActionsForControlEvents:UIControlEventValueChanged];
+    [self refreshConfigurationSummary];
+}
+
+- (void)showGameFiles {
+    if (_tabs.count > 3) [self selectTab:_tabs[3]];
+}
+
+- (void)refreshGameVersion {
+    const BOOL eflc = _gameVersion.selectedSegmentIndex == 1;
+    _playEyebrow.text = eflc ? @"GTA: EPISODES FROM LIBERTY CITY" : @"GTA IV";
+    _playIntro.text = eflc
+        ? @"Ride with The Lost and Damned, or step into The Ballad of Gay Tony."
+        : @"Pick up where you left off, or start a new story on these streets.";
+    _subtitle.text = eflc ? @"GTA: EFLC for iOS" : @"GTA IV for iOS";
 }
 
 - (UIView *)setting:(NSString *)title detail:(NSString *)detail toggle:(UISwitch *)toggle {
@@ -635,12 +817,13 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
         BOOL selected = !_pages[tab.tag].hidden;
         BOOL focused = tab.isFocused;
         UIButtonConfiguration *config = tab.configuration;
-        config.baseForegroundColor = selected || focused ? Ink(0xF0E4CC) : Ink(0x819091);
-        config.background.backgroundColor = focused
-            ? [Ink(0xE6B56B) colorWithAlphaComponent:.30]
-            : (selected ? [Ink(0xE6B56B) colorWithAlphaComponent:.13] : UIColor.clearColor);
-        config.background.strokeColor = focused ? Ink(0xE6B56B) : UIColor.clearColor;
-        config.background.strokeWidth = focused ? 1.5 : 0;
+        config.baseForegroundColor = selected || focused ? UIColor.whiteColor
+                                                         : [UIColor colorWithWhite:1 alpha:.72];
+        config.background.backgroundColor = selected
+            ? [UIColor colorWithWhite:1 alpha:.24] : UIColor.clearColor;
+        config.background.strokeColor = focused ? UIColor.whiteColor
+            : (selected ? [UIColor colorWithWhite:1 alpha:.35] : UIColor.clearColor);
+        config.background.strokeWidth = focused ? 1.5 : (selected ? .5 : 0);
         tab.configuration = config;
         tab.accessibilityTraits = UIAccessibilityTraitButton |
             (selected ? UIAccessibilityTraitSelected : 0);
@@ -655,8 +838,10 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     _pageTitle.text = titles[sender.tag];
     _pageDetail.text = details[sender.tag];
     [self updateTabAppearance];
+    if (sender.tag == 0) [self syncQuickSettings];
     [_navigationScroll scrollRectToVisible:sender.frame animated:NO];
     [_scroll setContentOffset:CGPointZero animated:NO];
+    [self setNeedsLayout];
 }
 
 - (void)didUpdateFocusInContext:(UIFocusUpdateContext *)context
@@ -702,58 +887,50 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     BOOL landscapePhoneMenu = phone && w >= h;
     CGFloat inset = landscapePhoneMenu
         ? MAX(20, MAX(self.safeAreaInsets.left, self.safeAreaInsets.right) + 8)
-        : (w < 650 ? 22 : 42);
-    CGFloat top = MAX(24, self.safeAreaInsets.top + 12);
-    CGFloat bottom = MAX(20, self.safeAreaInsets.bottom + 10);
+        : (w < 650 ? 16 : 36);
+    CGFloat top = MAX(20, self.safeAreaInsets.top + 8);
+    CGFloat bottom = MAX(16, self.safeAreaInsets.bottom + 6);
     BOOL compact = w < 850 || phone;
     if (phone) [self layoutPhonePages:landscapePhoneMenu && w - 2 * inset >= 680 &&
         !UIContentSizeCategoryIsAccessibilityCategory(self.traitCollection.preferredContentSizeCategory) ? 2 : 1];
 
-    if (_portraitMenu != portraitMenu || _landscapePhoneMenu != landscapePhoneMenu) {
+    if (!_styled || _portraitMenu != portraitMenu || _landscapePhoneMenu != landscapePhoneMenu) {
+        _styled = YES;
         _portraitMenu = portraitMenu;
         _landscapePhoneMenu = landscapePhoneMenu;
-        _navigation.axis = phone ? UILayoutConstraintAxisHorizontal
-                                        : UILayoutConstraintAxisVertical;
-        _navigation.distribution = phone ? UIStackViewDistributionFillEqually
-                                                : UIStackViewDistributionFill;
-        _navigation.spacing = portraitMenu ? 3 : 5;
+        // One floating glass tab bar across the top on every device.
+        _navigation.axis = UILayoutConstraintAxisHorizontal;
+        _navigation.distribution = UIStackViewDistributionFillEqually;
+        _navigation.spacing = portraitMenu ? 2 : 4;
         for (UIButton *tab in _tabs) {
             UIButtonConfiguration *config = tab.configuration;
             config.imagePlacement = portraitMenu ? NSDirectionalRectEdgeTop
                                                  : NSDirectionalRectEdgeLeading;
-            config.imagePadding = portraitMenu ? 3 : landscapePhoneMenu ? 6 : 12;
-            config.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithPointSize:phone ? 16 : 22];
+            config.imagePadding = portraitMenu ? 3 : 10;
+            config.preferredSymbolConfigurationForImage =
+                [UIImageSymbolConfiguration configurationWithPointSize:portraitMenu ? 16 : 19];
             config.contentInsets = portraitMenu
-                ? NSDirectionalEdgeInsetsMake(5, 2, 5, 2)
-                : landscapePhoneMenu ? NSDirectionalEdgeInsetsMake(8, 6, 8, 6)
-                                     : NSDirectionalEdgeInsetsMake(13, 12, 13, 12);
+                ? NSDirectionalEdgeInsetsMake(5, 4, 5, 4)
+                : NSDirectionalEdgeInsetsMake(10, 14, 10, 14);
             config.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *attributes) {
                 NSMutableDictionary *updated = [attributes mutableCopy];
-                updated[NSFontAttributeName] = [UIFont monospacedSystemFontOfSize:
-                    portraitMenu ? 10 : landscapePhoneMenu ? 11 : 12 weight:UIFontWeightBold];
+                updated[NSFontAttributeName] = [UIFont systemFontOfSize:portraitMenu ? 11 : 15
+                                                                 weight:UIFontWeightMedium];
                 return updated;
             };
             tab.configuration = config;
-            tab.contentHorizontalAlignment = phone
-                ? UIControlContentHorizontalAlignmentCenter
-                : UIControlContentHorizontalAlignmentLeading;
+            tab.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
         }
-        _wordmark.font = [UIFont fontWithName:@"HelveticaNeue-CondensedBlack"
-            size:(portraitMenu ? 52 : 67)] ?: [UIFont systemFontOfSize:
-                (portraitMenu ? 52 : 67) weight:UIFontWeightBlack];
-        _playHeadline.text = landscapePhoneMenu ? @"Liberty City awaits."
-                                                : @"One more night\nin Liberty City.";
         _playHeadline.font = [UIFontMetrics.defaultMetrics scaledFontForFont:
-            [UIFont systemFontOfSize:(landscapePhoneMenu ? 22 : portraitMenu ? 26 : 31)
-                             weight:UIFontWeightSemibold]];
-        _playIntro.hidden = landscapePhoneMenu;
+            [UIFont systemFontOfSize:(landscapePhoneMenu ? 28 : portraitMenu ? 32 : 40)
+                             weight:UIFontWeightBold]];
         _playSaveNote.hidden = landscapePhoneMenu;
-        _play.spacing = landscapePhoneMenu ? 12 : portraitMenu ? 16 : 22;
+        [self updateTabAppearance];
     }
 
     // Overscan the decorative world so an orbit never exposes the edge of the scene view.
-    _city.frame = CGRectMake(compact ? -w * .20 : w * .25, -h * .08,
-                             compact ? w * 1.40 : w * .92, h * 1.16);
+    _city.frame = CGRectMake(compact ? -w * .20 : w * .05, -h * .08,
+                             compact ? w * 1.40 : w * 1.0, h * 1.16);
     _atmosphere.frame = self.bounds;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
@@ -761,75 +938,65 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     _rain.frame = self.bounds;
     _rain.emitterPosition = CGPointMake(w * .66, -24);
     _rain.emitterSize = CGSizeMake(w * .75, 1);
-    _shade.opacity = compact ? .98 : 1;
     [CATransaction commit];
 
-    _masthead.text = phone ? @"THEFT4  /  LIBERTY CITY" : @"T H E F T 4   /   LIBERTY CITY";
-    _masthead.frame = CGRectMake(inset, top, w - 2 * inset, 20);
+    // Header: title and game line; hidden on short landscape phone screens.
+    const BOOL header = !landscapePhoneMenu;
+    _masthead.hidden = _subtitle.hidden = !header;
+    _masthead.frame = CGRectMake(inset, top, w - 2 * inset - (compact ? 0 : 260), 32);
+    _subtitle.frame = CGRectMake(inset, top + 32, w - 2 * inset, 20);
     _edition.hidden = compact;
-    _edition.frame = CGRectMake(w - 350, top, 350 - inset, 20);
-    _topRule.frame = CGRectMake(inset, top + 34, w - 2 * inset, 1);
+    _edition.frame = CGRectMake(w - 260 - inset, top + 8, 260, 20);
+    _topRule.hidden = _bottomRule.hidden = YES;
+    _wordmark.hidden = YES;
+    _navRule.hidden = YES;
+    _controllerHint.hidden = YES;
+    _pageDetail.hidden = YES;
+    _configuration.hidden = YES;
+    _sceneCaption.hidden = YES;
 
-    CGFloat panelTop = top + (phone ? 28 : 51);
-    CGFloat panelBottom = h - bottom - (phone ? 40 : 60);
-    CGFloat panelWidth = landscapePhoneMenu ? w - 2 * inset
-        : compact ? MIN(w - 2 * inset, 650) : MIN(w * .61, 740);
-    _menuPanel.frame = CGRectMake(inset, panelTop, panelWidth,
-        portraitMenu ? MAX(250, panelBottom - panelTop)
-                     : landscapePhoneMenu ? MAX(230, panelBottom - panelTop)
-                                          : MAX(300, panelBottom - panelTop));
+    CGFloat panelTop = top + (header ? 64 : 0);
+    CGFloat panelWidth = MIN(w - 2 * inset, 1240);
+    _menuPanel.frame = CGRectMake((w - panelWidth) / 2, panelTop, panelWidth,
+                                  MAX(230, h - bottom - panelTop));
     CGFloat pw = _menuPanel.bounds.size.width, ph = _menuPanel.bounds.size.height;
-    _wordmark.hidden = phone;
-    if (phone) {
-        CGFloat barHeight = portraitMenu ? 56 : 48;
-        _navigationScroll.frame = CGRectMake(8, 6, pw - 16, barHeight);
-        // Equal-width tabs fill the bar when they fit. On narrow screens (for
-        // example a folded device's cover display) widen the row to the widest
-        // tab's natural width and let the bar scroll sideways instead of
-        // clipping the trailing tabs.
-        CGFloat tabWidth = 0;
-        for (UIButton *tab in _tabs)
-            tabWidth = MAX(tabWidth, [tab systemLayoutSizeFittingSize:
-                UILayoutFittingCompressedSize].width);
-        const NSUInteger count = _tabs.count;
-        const CGFloat rowWidth = MAX(pw - 16, count * tabWidth +
-            (count > 1 ? (count - 1) * _navigation.spacing : 0));
-        _navigation.frame = CGRectMake(0, 0, rowWidth, barHeight);
-        _navigationScroll.contentSize = _navigation.bounds.size;
-        _navigationScroll.showsHorizontalScrollIndicator = NO;
-        _navigationScroll.alwaysBounceHorizontal = rowWidth > pw - 16;
-        _navigationScroll.alwaysBounceVertical = NO;
-        _navRule.frame = CGRectMake(12, barHeight + 14, pw - 24, 1);
-        _controllerHint.hidden = YES;
-        _pageTitle.frame = CGRectMake(14, barHeight + 22, pw - 28, 18);
-        _pageDetail.hidden = YES;
-        _scroll.frame = CGRectMake(12, barHeight + 48, pw - 24, MAX(40, ph - barHeight - 60));
-    } else {
-        _pageDetail.hidden = NO;
-        CGFloat navWidth = compact ? 145 : 174;
-        _wordmark.frame = CGRectMake(22, 12, pw - 44, 81);
-        _navigationScroll.frame = CGRectMake(12, landscapePhoneMenu ? 10 : 120,
-            navWidth - 16, MIN(260, ph - (landscapePhoneMenu ? 20 : 174)));
-        _navigation.frame = CGRectMake(0, 0, navWidth - 16, 260);
-        _navigationScroll.contentSize = _navigation.bounds.size;
-        _navRule.frame = CGRectMake(navWidth, landscapePhoneMenu ? 10 : 109,
-            1, ph - (landscapePhoneMenu ? 20 : 127));
-        _controllerHint.hidden = landscapePhoneMenu;
-        _controllerHint.frame = CGRectMake(17, ph - 42, navWidth - 26, 30);
-        _pageTitle.frame = CGRectMake(navWidth + 24, landscapePhoneMenu ? 10 : 111,
-            pw - navWidth - 44, 20);
-        _pageDetail.frame = CGRectMake(navWidth + 24, landscapePhoneMenu ? 33 : 134,
-            pw - navWidth - 44, 18);
-        _scroll.frame = CGRectMake(navWidth + 24, landscapePhoneMenu ? 63 : 168,
-            pw - navWidth - 39, ph - (landscapePhoneMenu ? 73 : 186));
-    }
 
-    _bottomRule.frame = CGRectMake(inset, h - bottom - (phone ? 34 : 46), w - 2 * inset, 1);
-    _statusLabel.frame = CGRectMake(inset, h - bottom - (phone ? 29 : 39), compact ? w - 2 * inset : w * .55, phone ? 30 : 38);
-    _configuration.hidden = compact;
-    _configuration.frame = CGRectMake(w * .55, h - bottom - 39, w * .45 - inset, 38);
-    _sceneCaption.hidden = compact;
-    _sceneCaption.frame = CGRectMake(w - 390, h - bottom - 114, 390 - inset, 48);
+    CGFloat barHeight = portraitMenu ? 56 : 50;
+    CGFloat barPad = 6;
+    _tabGlass.frame = CGRectMake(0, 0, pw, barHeight + 2 * barPad);
+    _tabGlass.layer.cornerRadius = (barHeight + 2 * barPad) / 2;
+    _navigationScroll.frame = CGRectMake(barPad + 4, barPad, pw - 2 * barPad - 8, barHeight);
+    // Equal-width tabs fill the bar when they fit. On narrow screens (for
+    // example a folded device's cover display) widen the row to the widest
+    // tab's natural width and let the bar scroll sideways instead of
+    // clipping the trailing tabs.
+    CGFloat tabWidth = 0;
+    for (UIButton *tab in _tabs)
+        tabWidth = MAX(tabWidth, [tab systemLayoutSizeFittingSize:
+            UILayoutFittingCompressedSize].width);
+    const NSUInteger count = _tabs.count;
+    const CGFloat barWidth = _navigationScroll.bounds.size.width;
+    const CGFloat rowWidth = MAX(barWidth, count * tabWidth +
+        (count > 1 ? (count - 1) * _navigation.spacing : 0));
+    _navigation.frame = CGRectMake(0, 0, rowWidth, barHeight);
+    _navigationScroll.contentSize = _navigation.bounds.size;
+    _navigationScroll.showsHorizontalScrollIndicator = NO;
+    _navigationScroll.alwaysBounceHorizontal = rowWidth > barWidth;
+    _navigationScroll.alwaysBounceVertical = NO;
+
+    // The Play page carries its own headings; other pages keep a small title.
+    const BOOL playing = !_pages[0].hidden;
+    _pageTitle.hidden = playing;
+    _pageTitle.textColor = UIColor.whiteColor;
+    CGFloat contentTop = _tabGlass.frame.size.height + (playing ? 18 : 46);
+    _pageTitle.frame = CGRectMake(12, _tabGlass.frame.size.height + 16, pw - 24, 20);
+    _scroll.frame = CGRectMake(0, contentTop, pw, MAX(40, ph - contentTop));
+
+    // Hero and side cards side by side when there is room, stacked otherwise.
+    const BOOL wide = pw >= 760;
+    _play.axis = wide ? UILayoutConstraintAxisHorizontal : UILayoutConstraintAxisVertical;
+    _play.alignment = wide ? UIStackViewAlignmentTop : UIStackViewAlignmentFill;
+    _heroWidth.active = wide;
     [self refreshConfigurationSummary];
 }
 
@@ -902,9 +1069,11 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
         _configuration.text = [NSString stringWithFormat:@"%@ / %@ / %@",
             native ? @"NATIVE PIXELS" : [NSString stringWithFormat:@"%up", self.renderHeight],
             shadow, distance];
+        [self syncQuickSettings];
         return;
     }
     _configuration.text = [NSString stringWithFormat:@"720p / %@ / %@", shadow, distance];
+    [self syncQuickSettings];
 }
 
 - (void)motionChanged:(NSNotification *)note { [self setActive:_active]; }

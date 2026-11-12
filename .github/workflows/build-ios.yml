@@ -69,6 +69,21 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
+      # Compile the launcher UI alone against the iPhoneOS SDK, both with and
+      # without the optional feature macros, so an error in it fails in about
+      # a minute instead of after the full build.
+      - name: Launcher compile check
+        working-directory: Theft4
+        run: |
+          set -euo pipefail
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          for defines in "" "-DTHEFT4_DIRECT_METAL_DEFAULT=1 -DTHEFT4_BC_TEXTURE_COMPATIBILITY=1"; do
+            xcrun --sdk iphoneos clang -fsyntax-only -fobjc-arc -x objective-c \
+              -target arm64-apple-ios26.0 -isysroot "$sdk" \
+              -Iios/Theft4 -Iios/bridge $defines ios/Theft4/Theft4LauncherView.m
+          done
+          echo "Launcher compiles."
+
       - name: Free disk space
         run: |
           df -h "$GITHUB_WORKSPACE"

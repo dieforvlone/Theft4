@@ -44,6 +44,8 @@
 @property(nonatomic, readonly) UIButton *exportSavesButton;
 @property(nonatomic, readonly) UIButton *importSavesButton;
 - (void)refreshConfigurationSummary;
+// Updates the Play page wording after gameVersion changes programmatically.
+- (void)refreshGameVersion;
 - (void)setActive:(BOOL)active;
 - (void)retireScene;
 @end

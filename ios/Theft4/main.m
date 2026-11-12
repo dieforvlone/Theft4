@@ -1820,6 +1820,7 @@ static BOOL Theft4PrepareEFLCGameFolder(NSURL *gta, NSURL *eflc, NSString **reas
     _setupValidated = NO;
     _baseGameChecked = NO;
     _bringupOverlay.gameVersion.selectedSegmentIndex = eflc ? 1 : 0;
+    [_bringupOverlay refreshGameVersion];
     [self completeSetupForInstalledGame];
     [self record:eflc ? @"game.version_eflc" : @"game.version_gta4"];
     [self refresh];
@@ -1830,6 +1831,7 @@ static BOOL Theft4PrepareEFLCGameFolder(NSURL *gta, NSURL *eflc, NSString **reas
     const NSInteger stored = [NSUserDefaults.standardUserDefaults
         integerForKey:Theft4GameVersionDefaultsKey];
     _bringupOverlay.gameVersion.selectedSegmentIndex = 0;
+    [_bringupOverlay refreshGameVersion];
     if (stored != Theft4GameVersionEFLC || _failure) return;
     // A missing or incomplete EFLC folder falls back to GTA IV silently.
     if (![self switchToGameVersion:Theft4GameVersionEFLC reason:NULL])
@@ -1844,6 +1846,7 @@ static BOOL Theft4PrepareEFLCGameFolder(NSURL *gta, NSURL *eflc, NSString **reas
     if (requested == current) return;
     if (_loading || _executionAttempted || _gamePresentation || _saveTransferBusy) {
         control.selectedSegmentIndex = current;
+        [_bringupOverlay refreshGameVersion];
         [self showSaveMessage:@"CLOSE THE GAME FIRST"
                      detail:@"Quit and reopen Theft4 to switch between GTA IV and GTA: EFLC."];
         return;
@@ -1851,6 +1854,7 @@ static BOOL Theft4PrepareEFLCGameFolder(NSURL *gta, NSURL *eflc, NSString **reas
     NSString *reason = nil;
     if (![self switchToGameVersion:requested reason:&reason]) {
         control.selectedSegmentIndex = current;
+        [_bringupOverlay refreshGameVersion];
         [self showSaveMessage:@"GTA: EFLC IS NOT SET UP" detail:reason ?: @"The game folder is not ready."];
         return;
     }
