@@ -41,6 +41,40 @@ set(THEFT4_ARM64_TUNE "" CACHE STRING
     "ARM64 scheduling target; empty uses the compiler default without changing ISA requirements")
 option(THEFT4_ENABLE_THIN_LTO
     "Enable Release ThinLTO for Theft4-owned AOT, bridge, and app targets" OFF)
+# Device-specific builds: a semicolon list of -mcpu names, best first; the
+# first one this compiler accepts is used. Code then uses that chip's newer
+# instructions and runs only on that chip family or newer, so such a build also
+# defines THEFT4_DEVICE_BUILD_PREFIX for the launcher's device check.
+set(THEFT4_ARM64_CPU "" CACHE STRING
+    "Optional device-specific -mcpu candidates (e.g. apple-a19;apple-a18); empty keeps every device supported")
+set(THEFT4_DEVICE_BUILD_PREFIX "" CACHE STRING
+    "Hardware identifier prefix the device-specific build requires, e.g. iPhone19,")
+set(THEFT4_ARM64_CPU_SELECTED "")
+if(THEFT4_ARM64_CPU)
+    include(CheckCXXCompilerFlag)
+    # Compile-only probes: an iOS test executable would need signing.
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    foreach(candidate IN LISTS THEFT4_ARM64_CPU)
+        string(MAKE_C_IDENTIFIER "THEFT4_COMPILER_ACCEPTS_MCPU_${candidate}" accepted)
+        check_cxx_compiler_flag("-mcpu=${candidate}" ${accepted})
+        if(${accepted})
+            set(THEFT4_ARM64_CPU_SELECTED "${candidate}")
+            break()
+        endif()
+    endforeach()
+    unset(CMAKE_TRY_COMPILE_TARGET_TYPE)
+    if(THEFT4_ARM64_CPU_SELECTED)
+        message(STATUS "Theft4 device-specific CPU target: ${THEFT4_ARM64_CPU_SELECTED}")
+    else()
+        message(WARNING "No requested -mcpu (${THEFT4_ARM64_CPU}) is supported; building for every device")
+    endif()
+endif()
+function(theft4_apply_device_cpu target)
+    if(THEFT4_ARM64_CPU_SELECTED AND CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+        target_compile_options(${target} PRIVATE "-mcpu=${THEFT4_ARM64_CPU_SELECTED}")
+    endif()
+endfunction()
+
 option(THEFT4_COMPILE_GTA4_NATIVE_BACKEND
     "Compile-check LibertyRecomp's GTA IV native renderer for iOS without selecting it" OFF)
 option(THEFT4_ENABLE_GTA4_NATIVE_BACKEND
@@ -93,6 +127,7 @@ if(THEFT4_BUILD_GAME_CODE)
     if(THEFT4_ARM64_TUNE AND CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
         target_compile_options(theft4_game_code PRIVATE "-mtune=${THEFT4_ARM64_TUNE}")
     endif()
+    theft4_apply_device_cpu(theft4_game_code)
     # The 38,606-call registrar only populates the function table once at
     # startup. Optimizing it has no gameplay benefit and makes clean Release
     # builds spend minutes in Apple Clang. Keep the actual generated source
@@ -147,6 +182,9 @@ if(THEFT4_LAB_BUILD)
     # The guest producer starts in rexruntime, outside the app and renderer
     # targets that otherwise receive the Lab flag.
     target_compile_definitions(rexruntime PRIVATE THEFT4_LAB_BUILD=1)
+endif()
+if(TARGET rexruntime)
+    theft4_apply_device_cpu(rexruntime)
 endif()
 if(REXGLUE_RUNTIME_ONLY)
     target_sources(theft4_core_bridge PRIVATE bridge/theft4_boot.cpp)
@@ -322,6 +360,7 @@ if(THEFT4_ENABLE_GAME_STARTUP)
             target_compile_options(theft4_gta4_native_compile PRIVATE
                 "-mtune=${THEFT4_ARM64_TUNE}")
         endif()
+        theft4_apply_device_cpu(theft4_gta4_native_compile)
 
         if(THEFT4_ENABLE_GTA4_NATIVE_BACKEND)
             target_sources(theft4_gta4_native_compile PRIVATE
@@ -532,6 +571,11 @@ add_executable(Theft4 MACOSX_BUNDLE Theft4/main.m Theft4/Theft4TouchControls.m
     Theft4/Theft4LauncherView.m
     Theft4/Theft4FrameTimeView.m Theft4/Theft4CityView.m Theft4/Theft4CPUUsageView.m
     Theft4/XeniOS-Touch-LICENSE.txt "${THEFT4_ASSET_CATALOG}" ${THEFT4_TIMECYCLE_RESOURCES})
+if(THEFT4_ARM64_CPU_SELECTED AND THEFT4_DEVICE_BUILD_PREFIX)
+    target_compile_definitions(Theft4 PRIVATE
+        "THEFT4_DEVICE_BUILD_PREFIX=\"${THEFT4_DEVICE_BUILD_PREFIX}\""
+        "THEFT4_DEVICE_BUILD_CPU=\"${THEFT4_ARM64_CPU_SELECTED}\"")
+endif()
 if(THEFT4_BC_TEXTURE_COMPATIBILITY)
     enable_language(OBJCXX)
     target_sources(Theft4 PRIVATE

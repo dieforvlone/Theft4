@@ -217,6 +217,10 @@ jobs:
         working-directory: Theft4
         env:
           THEFT4_BUILD_JOBS: 3
+          # iPhone Duo (A20 Pro, iPhone19,*) only build: the first -mcpu the
+          # compiler accepts is used; the launcher refuses other devices.
+          THEFT4_ARM64_CPU: "apple-a19;apple-a18;apple-a17"
+          THEFT4_DEVICE_BUILD_PREFIX: "iPhone19,"
         run: ./tools/build_ios_release.sh
 
       # The artifact is named after the packaged IPA (for example

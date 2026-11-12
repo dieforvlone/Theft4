@@ -90,6 +90,8 @@ print "Building Theft4 $version ($build_version) for public iOS sideloading"
   -DTHEFT4_BUNDLE_IDENTIFIER=com.lukebrosious.theft4 \
   -DTHEFT4_DISPLAY_NAME=Theft4 \
   "${renderer_build_args[@]}" \
+  -DTHEFT4_ARM64_CPU="${THEFT4_ARM64_CPU:-}" \
+  -DTHEFT4_DEVICE_BUILD_PREFIX="${THEFT4_DEVICE_BUILD_PREFIX:-}" \
   -DTHEFT4_SIGN_DEVICE=OFF \
   -DTHEFT4_PUBLIC_BUILD=ON \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \

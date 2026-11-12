@@ -678,9 +678,12 @@ static BOOL configureDeviceProfile(void) {
     // Apple's A19 iPhone family uses the iPhone18,* hardware identifiers. This
     // selects launch defaults only; it does not enable a new instruction set.
     const BOOL isA19 = strncmp(machine, "iPhone18,", 9) == 0;
+    // iPhone19,* is the A20 Pro iPhone Duo family.
+    const BOOL isA20 = strncmp(machine, "iPhone19,", 9) == 0;
     const BOOL isIPad = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;
     const uint64_t physicalMemory = NSProcessInfo.processInfo.physicalMemory;
-    const char *profile = theft4_device_profile_name(isIPad, physicalMemory, isA19);
+    const char *profile = isA20 && !theft4_is_6gb_iphone(isIPad, physicalMemory)
+        ? "a20" : theft4_device_profile_name(isIPad, physicalMemory, isA19);
     setenv("THEFT4_DEVICE_PROFILE", profile, 0);
     setenv("THEFT4_DEVICE_MODEL", machine, 0);
 #ifdef THEFT4_BC_TEXTURE_COMPATIBILITY
@@ -696,6 +699,7 @@ typedef NS_ENUM(NSInteger, Theft4AutomaticGraphicsTier) {
     Theft4AutomaticGraphicsTierOriginal,
     Theft4AutomaticGraphicsTierLow,
     Theft4AutomaticGraphicsTierIPhone17Pro,
+    Theft4AutomaticGraphicsTierIPhoneDuo,
     Theft4AutomaticGraphicsTierM5IPad
 };
 
@@ -714,6 +718,7 @@ static Theft4AutomaticGraphicsTier automaticGraphicsTier(void) {
         return Theft4AutomaticGraphicsTierLow;
     if (major == 18 && (minor == 1 || minor == 2))
         return Theft4AutomaticGraphicsTierIPhone17Pro;
+    if (major == 19) return Theft4AutomaticGraphicsTierIPhoneDuo;
     // iPhone17,* is the 16 family; iPhone18,3/5 are the standard 17 family.
     return Theft4AutomaticGraphicsTierOriginal;
 }
@@ -2304,6 +2309,20 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
             _motionBlur.on = NO;
             _depthOfField.on = NO;
             break;
+        case Theft4AutomaticGraphicsTierIPhoneDuo:
+            // A20 Pro: GPU headroom is large, the render thread is CPU-bound.
+            // Keep image quality high and the draw-count settings at 1x.
+            _bringupOverlay.renderResolution.selectedSegmentIndex = 2;
+            _bringupOverlay.fsrUpscaling.on = YES;
+            _shadowQuality.selectedSegmentIndex = 2;
+            _drawDistance.selectedSegmentIndex = 1;
+            _modelDetail.selectedSegmentIndex = 1;
+            _reflectionQuality.selectedSegmentIndex = 1;
+            _antiAliasing.selectedSegmentIndex = 2;
+            _anisotropicFiltering.on = YES;
+            _motionBlur.on = NO;
+            _depthOfField.on = NO;
+            break;
         case Theft4AutomaticGraphicsTierM5IPad:
             _bringupOverlay.renderResolution.selectedSegmentIndex = 3;
             _bringupOverlay.fsrUpscaling.on = YES;
@@ -3226,6 +3245,16 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     if (_textureCacheDeleting || _texturePreparation.running) return;
 #endif
     if (_loading || _executionAttempted || _saveTransferBusy || !game || !_supportURL || _failure) return;
+#ifdef THEFT4_DEVICE_BUILD_PREFIX
+    // This build's game code uses newer CPU instructions; other chips would
+    // crash as soon as it runs.
+    struct utsname deviceInfo = {};
+    if (uname(&deviceInfo) != 0 ||
+        strncmp(deviceInfo.machine, THEFT4_DEVICE_BUILD_PREFIX, strlen(THEFT4_DEVICE_BUILD_PREFIX)) != 0) {
+        [self bootEvent:@"This Theft4 build is for iPhone Duo (A20 Pro) only. Install the build for all iPhones."];
+        return;
+    }
+#endif
 #ifndef THEFT4_HAS_GAME_STARTUP
     if (execute) return;
 #endif
