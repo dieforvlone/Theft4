@@ -2329,7 +2329,9 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
             // Keep image quality high and the draw-count settings at 1x.
             _bringupOverlay.renderResolution.selectedSegmentIndex = 2;
             _bringupOverlay.fsrUpscaling.on = YES;
-            _shadowQuality.selectedSegmentIndex = 2;
+            // Original shadows: Enhanced (4x the shadow-map pixels) dropped
+            // TBoGT well below 30 fps at 1x draw distance on device.
+            _shadowQuality.selectedSegmentIndex = 1;
             _drawDistance.selectedSegmentIndex = 1;
             _modelDetail.selectedSegmentIndex = 1;
             _reflectionQuality.selectedSegmentIndex = 1;
