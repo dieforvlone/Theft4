@@ -6111,6 +6111,7 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
   }
   std::shared_ptr<const NativeBufferResource> matching_cache_entry;
   bool can_reuse_clean_capture = false;
+  bool volatile_handle = false;
   {
     std::lock_guard lock(buffer_resource_mutex_);
     const auto existing = buffer_resources_.find(handle);
@@ -6125,6 +6126,7 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
         CanReuseNativeBufferCapture(cache_present, dirty_buffer_handles_.contains(handle),
                                      metadata_matches) &&
         !metadata->guest_locked && !buffer_fast_path_disabled_.load(std::memory_order_relaxed);
+    volatile_handle = volatile_buffer_handles_.contains(handle);
   }
 
   const uint8_t* data = memory_->TranslateVirtual<const uint8_t*>(data_address);
@@ -6166,8 +6168,14 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
     if(NativeDevelopmentDiagnosticsEnabled())buffer_fast_path_request_count_.fetch_add(1, std::memory_order_relaxed);
     const size_t validation_offset =
         clean_cache_entry->shadow_validation_offset.load(std::memory_order_relaxed);
+    // Small buffers, and any the guest has already rewritten silently, are
+    // compared in full: a slice-per-reuse sweep can miss vehicle deformation
+    // for dozens of frames. Larger static buffers keep the bounded sweep.
+    constexpr size_t kFullValidationBytes = 16 * 1024;
+    const bool full_validation = volatile_handle || data_size <= kFullValidationBytes;
     const NativeBufferShadowValidationRange validation_range =
-        GetNativeBufferShadowValidationRange(data_size, validation_offset);
+        full_validation ? NativeBufferShadowValidationRange{0, data_size, 0, true}
+                        : GetNativeBufferShadowValidationRange(data_size, validation_offset);
     if(NativeDevelopmentDiagnosticsEnabled())buffer_shadow_validation_count_.fetch_add(1, std::memory_order_relaxed);
     if (NativeBufferShadowPayloadRangeMatches(data, clean_cache_entry->payload.data(), data_size,
                                               validation_range)) {
@@ -6180,12 +6188,18 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
       return clean_cache_entry;
     }
     if(NativeDevelopmentDiagnosticsEnabled())buffer_shadow_mismatch_count_.fetch_add(1, std::memory_order_relaxed);
-    if (ShouldDisableNativeBufferFastPath(true, false) &&
-        !buffer_fast_path_disabled_.exchange(true, std::memory_order_relaxed)) {
+    // Keep the fast path for every other buffer; only this one is always
+    // compared in full from now on.
+    bool newly_volatile = false;
+    {
+      std::lock_guard lock(buffer_resource_mutex_);
+      newly_volatile = volatile_buffer_handles_.insert(handle).second;
+    }
+    if (newly_volatile && volatile_buffer_logs_.fetch_add(1, std::memory_order_relaxed) < 16) {
       if(NativeDevelopmentDiagnosticsEnabled())buffer_fast_path_disable_count_.fetch_add(1, std::memory_order_relaxed);
-      REXLOG_ERROR(
-          "gta4-native: buffer shadow mismatch for {:08X}; disabling clean-buffer fast path "
-          "for this session; backing={:08X} size={} flags={:08X} generation={} "
+      REXLOG_WARN(
+          "gta4-native: buffer {:08X} rewritten without notification; validating it in full "
+          "from now on; backing={:08X} size={} flags={:08X} generation={} "
           "validation-offset={} validation-length={} captured-frame={} last-used-frame={}",
           handle, data_address, data_size, flags, clean_cache_entry->generation,
           validation_range.offset, validation_range.length, clean_cache_entry->created_frame,

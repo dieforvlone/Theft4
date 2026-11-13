@@ -2064,6 +2064,10 @@ class Gta4NativeGraphicsSystem final : public system::IGraphicsSystem {
   NativeGeometryRetirement metal_buffer_retirement_;
 #endif
   std::unordered_set<uint32_t> dirty_buffer_handles_;
+  // Buffers the guest has rewritten without a lock/dirty notification (for
+  // example vehicle deformation). They are fully compared on every reuse.
+  std::unordered_set<uint32_t> volatile_buffer_handles_;
+  std::atomic<uint32_t> volatile_buffer_logs_{0};
   NativeBufferAliasIndex buffer_alias_index_;
   std::unordered_set<uint32_t> unindexed_buffer_handles_;
   uint64_t next_buffer_generation_ = 1;
