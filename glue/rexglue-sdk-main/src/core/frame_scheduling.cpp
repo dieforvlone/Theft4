@@ -388,11 +388,13 @@ constexpr size_t kMaxKeys = 400000;
 struct Key {
   uint32_t slot = 0, slice = 0;
   uint64_t pc = 0;  // 0 = waiting
+  uint64_t lr = 0;  // caller, to attribute time spent in system libraries
   bool operator==(const Key&) const = default;
 };
 struct KeyHash {
   size_t operator()(const Key& k) const {
-    return std::hash<uint64_t>()(k.pc ^ (uint64_t(k.slot) << 48) ^ (uint64_t(k.slice) << 32));
+    return std::hash<uint64_t>()(k.pc ^ (k.lr * 0x9E3779B97F4A7C15ull) ^ (uint64_t(k.slot) << 48) ^
+                                 (uint64_t(k.slice) << 32));
   }
 };
 std::mutex mutex;
@@ -426,20 +428,23 @@ void Loop() {
       if (thread_info(port, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &count) !=
           KERN_SUCCESS)
         continue;
-      uint64_t pc = 0;
+      uint64_t pc = 0, lr = 0;
       if (info.run_state == TH_STATE_RUNNING && thread_suspend(port) == KERN_SUCCESS) {
         arm_thread_state64_t state{};
         mach_msg_type_number_t state_count = ARM_THREAD_STATE64_COUNT;
         if (thread_get_state(port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state),
                              &state_count) == KERN_SUCCESS)
+        {
           pc = uint64_t(arm_thread_state64_get_pc(state));
+          lr = uint64_t(arm_thread_state64_get_lr(state));
+        }
         thread_resume(port);
         if (!pc)
           continue;
       }
       std::lock_guard lock(mutex);
       ++total_samples;
-      const Key key{i, slice, pc};
+      const Key key{i, slice, pc, pc ? lr : 0};
       auto it = counts.find(key);
       if (it != counts.end()) ++it->second;
       else if (counts.size() < kMaxKeys) counts.emplace(key, 1);
@@ -476,9 +481,9 @@ extern "C" int rex_pc_profile_write_csv(const char* path) {
   if (!file)
     return -1;
   std::fprintf(file,
-               "# pc-profile v2: interval_us=%u slice_s=10 samples=%llu dropped=%llu "
+               "# pc-profile v3: interval_us=%u slice_s=10 samples=%llu dropped=%llu "
                "image_base=0x%llx; roles 1=guest 2=main guest 4=native renderer 8=frame "
-               "producer 16=audio; pc 0x0 = waiting\n",
+               "producer 16=audio; pc 0x0 = waiting; lr = caller\n",
                profile::kIntervalUs, (unsigned long long)total, (unsigned long long)dropped,
                (unsigned long long)(uintptr_t)_dyld_get_image_header(0));
   // One line per sampled thread: identity for naming game threads.
@@ -489,10 +494,11 @@ extern "C" int rex_pc_profile_write_csv(const char* path) {
                    (unsigned long long)ring_ids[i].load(std::memory_order_relaxed),
                    ring_roles[i].load(std::memory_order_relaxed),
                    ring_entries[i].load(std::memory_order_relaxed));
-  std::fprintf(file, "slot,slice,pc,count\n");
+  std::fprintf(file, "slot,slice,pc,lr,count\n");
   for (const auto& [key, count] : rows)
-    std::fprintf(file, "%u,%u,0x%llx,%llu\n", key.slot, key.slice,
-                 (unsigned long long)key.pc, (unsigned long long)count);
+    std::fprintf(file, "%u,%u,0x%llx,0x%llx,%llu\n", key.slot, key.slice,
+                 (unsigned long long)key.pc, (unsigned long long)key.lr,
+                 (unsigned long long)count);
   std::fclose(file);
   return int(total);
 }

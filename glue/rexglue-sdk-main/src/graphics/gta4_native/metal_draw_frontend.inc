@@ -355,8 +355,7 @@ bool Gta4NativeGraphicsSystem::PrepareNativeMetalDraw(
           mask[0],mask[1],mask[2],mask[3],required};
       bytes=native_metal_frame_->constant_packets.Find(covered_key);
       if(!bytes) {
-        // Masked writes leave unused registers untouched: keep them zero.
-        auto covered=native_metal_frame_->AcquireConstant();covered->value.assign(extent,0);
+        auto covered=native_metal_frame_->AcquireConstant();covered->value.resize(extent);
         const uint64_t written=projected_constants.WriteMasked(key.vertex_shader_hash,key.pixel_shader_hash,
             bank,version,constant_usage,covered->value,
             [](const r::Bytes& payload){return std::span<const uint8_t>(payload.value);},CopyGuestWordsToHost);

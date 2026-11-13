@@ -257,11 +257,8 @@ bool Gta4NativeGraphicsSystem::PublishNativeMetalFrame(
   if(!native_metal_frame_->constant_arena)
     native_metal_frame_->constant_arena=std::make_unique<NativeSharedFrameArena<r::Bytes,16>>(
         96*1024*1024,!theft4_retail_mode(),4096);
-  // Keep each recycled constant's size and bytes: every user overwrites them
-  // in full (assign, a full bank copy, or an explicit zero fill), so clearing
-  // here only forced a 4 KB zero fill before each full-bank copy.
   native_metal_frame_->constant_arena->BeginBatch([](r::Bytes& bytes){
-    bytes.generation=0;bytes.conversion={};
+    bytes.generation=0;bytes.conversion={};bytes.value.clear();
   });
   arena_done=tick();
   if(present.device&&!diagnostic_scan)ReleaseUnusedMetalBufferResources(active_texture_frame_);

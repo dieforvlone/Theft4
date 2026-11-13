@@ -12,6 +12,7 @@
 #include "native_exclusive_generation_retirement.h"
 #endif
 #include "native_light_capture.h"
+#include <chrono>
 #include <rex/diagnostics/frame_scheduling.h>
 #include <rex/diagnostics/runtime_probe.h>
 #include <rex/fault_diagnostics.h>
@@ -6071,6 +6072,33 @@ void Gta4NativeGraphicsSystem::MarkBufferWriteLocked(uint32_t handle) {
   if(NativeDevelopmentDiagnosticsEnabled())buffer_alias_invalidations_.fetch_add(aliases, std::memory_order_relaxed);
 }
 
+namespace {
+// Capture-only vertex/index buffer counters, logged as warnings every 2 s so
+// a performance capture shows whether guest rewrites (vehicle dents) are seen.
+struct NativeBufferCaptureCounters {
+  std::atomic<uint64_t> calls{0}, clean_reuses{0}, clean_mismatches{0}, full_compares{0},
+      full_matches{0}, recaptures{0}, small_full_checks{0}, large_probe_checks{0};
+  std::atomic<uint64_t> last_log_ns{0};
+};
+NativeBufferCaptureCounters g_buffer_counters;
+void LogNativeBufferCountersIfDue() {
+  if (!light::enabled.load(std::memory_order_relaxed)) return;
+  const uint64_t now = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count());
+  uint64_t last = g_buffer_counters.last_log_ns.load(std::memory_order_relaxed);
+  if (now - last < 2000000000ull ||
+      !g_buffer_counters.last_log_ns.compare_exchange_strong(last, now)) return;
+  auto take = [](std::atomic<uint64_t>& v) { return v.exchange(0, std::memory_order_relaxed); };
+  const uint64_t calls = take(g_buffer_counters.calls), reuses = take(g_buffer_counters.clean_reuses),
+      mismatches = take(g_buffer_counters.clean_mismatches),
+      compares = take(g_buffer_counters.full_compares), matches = take(g_buffer_counters.full_matches),
+      recaptures = take(g_buffer_counters.recaptures), small = take(g_buffer_counters.small_full_checks),
+      large = take(g_buffer_counters.large_probe_checks);
+  REXLOG_WARN("gta4-native-buffers: calls={} clean-reuses={} clean-mismatches={} small-full-checks={} "
+              "large-probe-checks={} dirty-full-compares={} dirty-unchanged={} recaptures={}",
+              calls, reuses, mismatches, small, large, compares, matches, recaptures);
+}
+}  // namespace
 std::shared_ptr<const Gta4NativeGraphicsSystem::NativeBufferResource>
 Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
   auto reject = [handle](const char* reason, uint32_t flags, uint32_t data_address,
@@ -6109,6 +6137,8 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
   if (!metadata->HasValidPayload(kMaximumResourcePayloadSize)) {
     return reject("metadata", flags, data_address, data_size);
   }
+  g_buffer_counters.calls.fetch_add(1, std::memory_order_relaxed);
+  LogNativeBufferCountersIfDue();
   std::shared_ptr<const NativeBufferResource> matching_cache_entry;
   bool can_reuse_clean_capture = false;
   bool volatile_handle = false;
@@ -6146,6 +6176,8 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
     const bool timed = count && !(count % 256) && light::enabled.load(std::memory_order_relaxed);
     const uint64_t begin = timed ? light::Tick() : 0;
     full_payload_matches = NativeBufferShadowPayloadMatches(data, matching_cache_entry->payload.data(), data_size);
+    g_buffer_counters.full_compares.fetch_add(1, std::memory_order_relaxed);
+    if (full_payload_matches) g_buffer_counters.full_matches.fetch_add(1, std::memory_order_relaxed);
     if (timed) {
       buffer_validation_sample_ticks_.fetch_add(light::Tick() - begin, std::memory_order_relaxed);
       buffer_validation_sample_bytes_.fetch_add(data_size, std::memory_order_relaxed);
@@ -6179,6 +6211,8 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
     if(NativeDevelopmentDiagnosticsEnabled())buffer_shadow_validation_count_.fetch_add(1, std::memory_order_relaxed);
     bool clean_matches = NativeBufferShadowPayloadRangeMatches(
         data, clean_cache_entry->payload.data(), data_size, validation_range);
+    (full_validation ? g_buffer_counters.small_full_checks : g_buffer_counters.large_probe_checks)
+        .fetch_add(1, std::memory_order_relaxed);
     if (clean_matches && !full_validation) {
       // Larger buffers also get 32 small probes spread across the whole
       // payload, at a phase that moves with the sweep. Deformation (such as
@@ -6196,6 +6230,8 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
         clean_matches = std::memcmp(data + offset, captured + offset, length) == 0;
       }
     }
+    (clean_matches ? g_buffer_counters.clean_reuses : g_buffer_counters.clean_mismatches)
+        .fetch_add(1, std::memory_order_relaxed);
     if (clean_matches) {
       clean_cache_entry->shadow_validation_offset.store(validation_range.next_offset,
                                                         std::memory_order_relaxed);
@@ -6253,6 +6289,7 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
   resource->last_used_frame.store(resource->created_frame, std::memory_order_relaxed);
   resource->payload = std::move(payload);
   const bool replacing = existing != buffer_resources_.end() && existing->second;
+  if (replacing) g_buffer_counters.recaptures.fetch_add(1, std::memory_order_relaxed);
   buffer_resources_[handle] = resource;
 #ifdef THEFT4_DIRECT_METAL_BACKEND
   metal_buffer_retirement_.Track(handle);
