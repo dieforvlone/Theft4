@@ -19,6 +19,11 @@ uint32_t rex_frame_scheduling_read(uint32_t* cursor, rex_frame_scheduling_sample
                                    uint32_t capacity);
 uint64_t rex_frame_scheduling_dropped(void);
 const char* rex_frame_scheduling_columns(void);
+// Main-thread profile. While capture is on, a sampler records where the main
+// guest, frame-producer and native-renderer threads are (or that they wait)
+// about 250 times per second. Writes an aggregated CSV of program counters;
+// returns the number of samples written, or -1.
+int rex_pc_profile_write_csv(const char* path);
 #ifdef __cplusplus
 }
 namespace rex::diagnostics::frame_schedule {

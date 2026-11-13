@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "theft4_retail_mode.h"
 #include "theft4_trait_cache.h"
 #include "theft4_native_metal.h"
@@ -750,7 +751,17 @@ bool Frame::Present(id<CAMetalDrawable> drawable, std::string& error) {
       drawable.texture != impl_->stored_color)
     return Error(error, "Metal presentation requires the stored drawable pass");
   if(impl_->blit){[impl_->blit endEncoding];impl_->blit=nil;}
-  [impl_->buffer presentDrawable:drawable]; impl_->presented = true; return true;
+  // The title produces at most 30 frames per second. A minimum on-screen
+  // duration paces them evenly and lets the display lower its refresh rate.
+  // THEFT4_PRESENT_FPS=0 presents each drawable as soon as it completes.
+  static const double minimum_duration=[] {
+    const char* value=std::getenv("THEFT4_PRESENT_FPS");
+    const double fps=value?std::atof(value):30.0;
+    return fps>0?1.0/fps:0.0;
+  }();
+  if(minimum_duration>0)[impl_->buffer presentDrawable:drawable afterMinimumDuration:minimum_duration];
+  else [impl_->buffer presentDrawable:drawable];
+  impl_->presented = true; return true;
 }
 void Frame::RetainUntilCompletion(std::shared_ptr<void> lease) {
   if(*this)impl_->upload_lease=std::move(lease);

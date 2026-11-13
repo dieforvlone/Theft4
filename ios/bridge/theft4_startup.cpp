@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "theft4_retail_mode.h"
 #include "theft4_boot.h"
 #include "theft4_bootstrap_audio.h"
@@ -83,6 +84,33 @@ REXCVAR_DECLARE(double, gta4_lod_selection_distance_scale);
 REXCVAR_DECLARE(double, gta4_draw_distance_scale);
 REXCVAR_DECLARE(uint32_t, gta4_drawable_reference_limit);
 #endif
+#ifdef THEFT4_HAS_GTA4_NATIVE_BACKEND
+namespace {
+// Launch values Heat Guard scales from; zero until the game has started.
+std::atomic<double> heat_guard_draw_distance{0.0}, heat_guard_shadow_distance{0.0};
+std::atomic<int> heat_guard_level{-1};
+}
+#endif
+extern "C" void theft4_heat_guard_apply(int thermal_state) {
+#ifdef THEFT4_HAS_GTA4_NATIVE_BACKEND
+  const double draw = heat_guard_draw_distance.load(), shadow = heat_guard_shadow_distance.load();
+  if (draw <= 0.0 || shadow <= 0.0) return;
+  // 0 = launch settings, 1 = serious, 2 = critical.
+  const int level = thermal_state >= 3 ? 2 : thermal_state >= 2 ? 1 : 0;
+  if (heat_guard_level.exchange(level) == level) return;
+  const double draw_factor = level == 2 ? 0.6 : level == 1 ? 0.75 : 1.0;
+  const double shadow_factor = level == 2 ? 0.5 : level == 1 ? 0.75 : 1.0;
+  // Never go below the launcher's Optimized draw distance (0.70x) at serious.
+  const double draw_scale = level == 0 ? draw : std::min(draw, std::max(draw * draw_factor, level == 2 ? 0.5 : 0.70));
+  const double shadow_scale = shadow * shadow_factor;
+  REXCVAR_SET(gta4_draw_distance_scale, draw_scale);
+  REXCVAR_SET(gta4_shadow_distance_scale, shadow_scale);
+  REXLOG_WARN("Theft4 heat guard: thermal={} level={} draw-distance={:.2f} shadow-distance={:.2f}",
+              thermal_state, level, draw_scale, shadow_scale);
+#else
+  (void)thermal_state;
+#endif
+}
 
 extern const rex::PPCImageInfo PPCImageConfig;
 extern "C" void gta4_transition_hooks_link_anchor();
@@ -340,6 +368,7 @@ int theft4_start_game(const char* game_directory, const char* support_directory,
         }
         REXCVAR_SET(gta4_shadow_map_base_size, shadow_map_size);
         REXCVAR_SET(gta4_shadow_distance_scale, shadow_distance);
+        heat_guard_shadow_distance.store(shadow_distance);
 
         const char* draw_distance_override = std::getenv("THEFT4_DRAW_DISTANCE");
         const std::string_view draw_distance =
@@ -364,6 +393,7 @@ int theft4_start_game(const char* game_directory, const char* support_directory,
             throw std::runtime_error("THEFT4_DRAW_DISTANCE must be 0.70, 1, 2, or 3");
         }
         REXCVAR_SET(gta4_draw_distance_scale, draw_distance_scale);
+        heat_guard_draw_distance.store(draw_distance_scale);
         REXCVAR_SET(gta4_drawable_reference_limit, drawable_reference_limit);
 
         const char* highest_lod_override = std::getenv("THEFT4_FORCE_HIGHEST_LOD");

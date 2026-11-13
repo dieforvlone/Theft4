@@ -564,6 +564,7 @@ static BOOL Theft4InstallSaveExport(NSURL *selected, NSURL *support, NSURL *docu
     BOOL _gamePresentation;
     BOOL _launcherDuringGame;
     UIButton *_gameMenuButton;
+    NSTimer *_heatGuardTimer;
     NSUInteger _gameMenuButtonGeneration;
     BOOL _legacyIPadProfile;
     BOOL _limitedMemoryProfile;
@@ -620,6 +621,10 @@ static BOOL Theft4InstallSaveExport(NSURL *selected, NSURL *support, NSURL *docu
 - (void)recordWindowState:(NSString *)event;
 - (void)skipIntroChanged:(UISwitch *)sender;
 - (void)twoCoreRenderingChanged:(UISwitch *)sender;
+- (void)heatGuardChanged:(UISwitch *)sender;
+- (void)applyHeatGuard;
+- (void)syncGraphicsProfileForVersion:(NSInteger)version;
+- (void)reloadGraphicsControlsFromDefaults;
 - (void)downloadLatestLogCapture;
 - (void)exportSavesToFiles;
 - (void)importSavesFromFiles;
@@ -746,6 +751,11 @@ static void bootEvent(void *context, const char *event) {
     [NSNotificationCenter.defaultCenter addObserver:self
         selector:@selector(performanceProfileChanged:)
         name:NSProcessInfoPerformanceProfileDidChangeNotification object:nil];
+    __weak typeof(self) thermalTarget = self;
+    [NSNotificationCenter.defaultCenter addObserverForName:NSProcessInfoThermalStateDidChangeNotification
+        object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+            [thermalTarget applyHeatGuard];
+        }];
     self.controllerUserInteractionEnabled = YES;
     _legacyIPadProfile = configureDeviceProfile();
     const char *deviceProfile = getenv("THEFT4_DEVICE_PROFILE") ?: "";
@@ -844,6 +854,10 @@ static void bootEvent(void *context, const char *event) {
     _bringupOverlay.skipIntro.on = ![NSUserDefaults.standardUserDefaults objectForKey:@"Theft4SkipIntro"] ||
         [NSUserDefaults.standardUserDefaults boolForKey:@"Theft4SkipIntro"];
     [_bringupOverlay.skipIntro addTarget:self action:@selector(skipIntroChanged:)
+        forControlEvents:UIControlEventValueChanged];
+    _bringupOverlay.heatGuard.on = ![NSUserDefaults.standardUserDefaults objectForKey:@"Theft4HeatGuard"] ||
+        [NSUserDefaults.standardUserDefaults boolForKey:@"Theft4HeatGuard"];
+    [_bringupOverlay.heatGuard addTarget:self action:@selector(heatGuardChanged:)
         forControlEvents:UIControlEventValueChanged];
     _bringupOverlay.twoCoreRendering.on = ![NSUserDefaults.standardUserDefaults objectForKey:@"Theft4TwoCoreRendering"] ||
         [NSUserDefaults.standardUserDefaults boolForKey:@"Theft4TwoCoreRendering"];
@@ -1839,8 +1853,73 @@ static BOOL Theft4PrepareEFLCGameFolder(NSURL *gta, NSURL *eflc, NSString **reas
     [_bringupOverlay refreshGameVersion];
     [self completeSetupForInstalledGame];
     [self record:eflc ? @"game.version_eflc" : @"game.version_gta4"];
+    [self syncGraphicsProfileForVersion:version];
     [self refresh];
     return YES;
+}
+
+// Graphics settings are kept per game: GTA IV and GTA: EFLC each restore the
+// settings last used with them. The first switch to a game keeps the current
+// settings, which then become that game's own.
+static NSArray<NSString *> *Theft4PerGameGraphicsKeys(void) {
+    return @[@"Theft4ShadowQuality", @"Theft4DrawDistance", @"Theft4ModelDetail",
+             @"Theft4ReflectionQuality", @"Theft4AntiAliasing", @"Theft4LabRenderHeight",
+             @"Theft4LabFSREnabled", @"Theft4Sharpening", @"Theft4AnisotropicFiltering",
+             @"Theft4EnhancedOutput1080p", @"Theft4ExperimentalFSRBoost", @"Theft4MotionBlur",
+             @"Theft4DepthOfField", @"Theft4GraphicsPreset"];
+}
+
+- (void)syncGraphicsProfileForVersion:(NSInteger)version {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSString *target = version == Theft4GameVersionEFLC ? @"eflc" : @"gta4";
+    NSString *owner = [defaults stringForKey:@"Theft4GraphicsProfileOwner"];
+    if (!owner) { [defaults setObject:target forKey:@"Theft4GraphicsProfileOwner"]; return; }
+    if ([owner isEqualToString:target]) return;
+    NSMutableDictionary *snapshot = [NSMutableDictionary new];
+    for (NSString *key in Theft4PerGameGraphicsKeys()) {
+        id value = [defaults objectForKey:key];
+        if (value) snapshot[key] = value;
+    }
+    [defaults setObject:snapshot forKey:[@"Theft4GraphicsProfile." stringByAppendingString:owner]];
+    NSDictionary *profile = [defaults dictionaryForKey:[@"Theft4GraphicsProfile." stringByAppendingString:target]];
+    [defaults setObject:target forKey:@"Theft4GraphicsProfileOwner"];
+    if (!profile) return;
+    for (NSString *key in Theft4PerGameGraphicsKeys()) {
+        if (profile[key]) [defaults setObject:profile[key] forKey:key];
+        else [defaults removeObjectForKey:key];
+    }
+    [self reloadGraphicsControlsFromDefaults];
+}
+
+- (void)reloadGraphicsControlsFromDefaults {
+    if (_executionAttempted) return;
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    _anisotropicFiltering.on = [defaults boolForKey:@"Theft4AnisotropicFiltering"];
+    _enhancedOutput.on = [defaults boolForKey:@"Theft4EnhancedOutput1080p"];
+    _fsrBoost.on = [defaults boolForKey:@"Theft4ExperimentalFSRBoost"];
+    _motionBlur.on = [defaults boolForKey:@"Theft4MotionBlur"];
+    _depthOfField.on = [defaults boolForKey:@"Theft4DepthOfField"];
+    NSArray<UISegmentedControl *> *choices = @[_shadowQuality, _drawDistance, _modelDetail,
+        _reflectionQuality, _antiAliasing];
+    NSArray<NSString *> *keys = @[@"Theft4ShadowQuality", @"Theft4DrawDistance",
+        @"Theft4ModelDetail", @"Theft4ReflectionQuality", @"Theft4AntiAliasing"];
+    for (NSUInteger i = 0; i < choices.count; ++i) {
+        UISegmentedControl *choice = choices[i];
+        if (!choice) continue;
+        choice.selectedSegmentIndex = MAX(0, MIN(choice.numberOfSegments - 1,
+            [defaults integerForKey:keys[i]]));
+    }
+    if (_bringupOverlay.sharpening)
+        _bringupOverlay.sharpening.value = MAX(0, MIN(100, [defaults integerForKey:@"Theft4Sharpening"]));
+    if (_bringupOverlay.renderResolution) {
+        uint32_t height = theft4_lab_render_height((uint32_t)[defaults integerForKey:@"Theft4LabRenderHeight"]);
+        _bringupOverlay.renderResolution.selectedSegmentIndex =
+            height == 540 ? 0 : height == 900 ? 2 : height == 1080 ? 3 :
+            height == THEFT4_LAB_NATIVE_16_9 ? 4 : 1;
+        _bringupOverlay.fsrUpscaling.on = [defaults boolForKey:@"Theft4LabFSREnabled"];
+    }
+    [self applyLimitedMemoryCaps];
+    [self displaySettingsChanged:nil];
 }
 
 - (void)applyStoredGameVersion {
@@ -1848,11 +1927,16 @@ static BOOL Theft4PrepareEFLCGameFolder(NSURL *gta, NSURL *eflc, NSString **reas
         integerForKey:Theft4GameVersionDefaultsKey];
     _bringupOverlay.gameVersion.selectedSegmentIndex = 0;
     [_bringupOverlay refreshGameVersion];
-    if (stored != Theft4GameVersionEFLC || _failure) return;
+    if (stored != Theft4GameVersionEFLC || _failure) {
+        [self syncGraphicsProfileForVersion:Theft4GameVersionGTAIV];
+        return;
+    }
     // A missing or incomplete EFLC folder falls back to GTA IV silently.
-    if (![self switchToGameVersion:Theft4GameVersionEFLC reason:NULL])
+    if (![self switchToGameVersion:Theft4GameVersionEFLC reason:NULL]) {
         [NSUserDefaults.standardUserDefaults setInteger:Theft4GameVersionGTAIV
                                                  forKey:Theft4GameVersionDefaultsKey];
+        [self syncGraphicsProfileForVersion:Theft4GameVersionGTAIV];
+    }
 }
 
 - (void)gameVersionChanged:(UISegmentedControl *)control {
@@ -2131,6 +2215,21 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 
 - (void)skipIntroChanged:(UISwitch *)sender {
     [NSUserDefaults.standardUserDefaults setBool:sender.on forKey:@"Theft4SkipIntro"];
+}
+
+- (void)heatGuardChanged:(UISwitch *)sender {
+    [NSUserDefaults.standardUserDefaults setBool:sender.on forKey:@"Theft4HeatGuard"];
+    [self applyHeatGuard];
+}
+
+// Shortens draw and shadow distance while the phone is serious or critical,
+// and restores the launch settings once it cools. No effect before Play.
+- (void)applyHeatGuard {
+#if defined(THEFT4_HAS_GAME_LOADER) && defined(THEFT4_HAS_GAME_STARTUP)
+    if (!_gamePresentation) return;
+    const BOOL enabled = !_bringupOverlay.heatGuard || _bringupOverlay.heatGuard.on;
+    theft4_heat_guard_apply(enabled ? (int)NSProcessInfo.processInfo.thermalState : 0);
+#endif
 }
 
 - (void)twoCoreRenderingChanged:(UISwitch *)sender {
@@ -2448,6 +2547,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     BOOL motionBlur = _motionBlur.on;
     BOOL depthOfField = _depthOfField.on;
     BOOL twoCoreRendering = !_bringupOverlay.twoCoreRendering || _bringupOverlay.twoCoreRendering.on;
+    BOOL heatGuard = !_bringupOverlay.heatGuard || _bringupOverlay.heatGuard.on;
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSFileManager *fm = NSFileManager.defaultManager;
@@ -2493,6 +2593,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
              "Theft4 device profile: %@\n"
              "Build CPU target: %s\n"
              "Two-core rendering: %@\n"
+             "Heat Guard: %@ (thermal state at export %ld)\n"
              "Lightweight capture switch at export: %@\n"
              "Frame counter enabled: %@\n"
              "Anisotropic filtering: %@\n"
@@ -2506,6 +2607,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
             systemVersion, (unsigned long long)(physicalMemory >> 20), profile,
             THEFT4_BUILD_CPU_DESCRIPTION,
             twoCoreRendering ? @"ON" : @"OFF",
+            heatGuard ? @"ON" : @"OFF", (long)NSProcessInfo.processInfo.thermalState,
             performanceCapture ? @"ON" : @"OFF", showFPS ? @"ON" : @"OFF",
             anisotropy ? @"ON" : @"OFF", enhancedOutput ? @"ON" : @"OFF",
             fsrBoost ? @"ON" : @"OFF", motionBlur ? @"ON" : @"OFF",
@@ -2555,6 +2657,11 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
                 [latestFrameCapture.lastPathComponent stringByReplacingOccurrencesOfString:@"publication-trace-" withString:@"frame-scheduling-"]];
             if ([fm fileExistsAtPath:schedulingCapture.path]) success = success && Theft4AppendDiagnosticFile(stream,
                 schedulingCapture, [@"Theft4/startup/frame-captures/" stringByAppendingString:schedulingCapture.lastPathComponent],
+                &budget, included, skipped);
+            NSURL *profileCapture = [frameDirectory URLByAppendingPathComponent:
+                [latestFrameCapture.lastPathComponent stringByReplacingOccurrencesOfString:@"publication-trace-" withString:@"pc-profile-"]];
+            if ([fm fileExistsAtPath:profileCapture.path]) success = success && Theft4AppendDiagnosticFile(stream,
+                profileCapture, [@"Theft4/startup/frame-captures/" stringByAppendingString:profileCapture.lastPathComponent],
                 &budget, included, skipped);
         }
         success = success && Theft4AppendDiagnosticFile(stream, lifecycleURL,
@@ -2691,6 +2798,13 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     [_bringupOverlay retireScene];
     _gamePresentation = YES;
     self.controllerUserInteractionEnabled = NO;
+    // Heat Guard: recheck the thermal state every few seconds while playing.
+    [_heatGuardTimer invalidate];
+    __weak typeof(self) heatGuardTarget = self;
+    _heatGuardTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *timer) {
+        [heatGuardTarget applyHeatGuard];
+    }];
+    [self applyHeatGuard];
     [UIView animateWithDuration:0.2 animations:^{
         self->_bringupOverlay.alpha = 0.0;
     } completion:^(BOOL finished) {
@@ -3186,6 +3300,14 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2), _publicationCaptureQueue, ^{
         [self collectFrameScheduling];
         [self flushFrameScheduling];
+        // Main-thread profile: where the main guest, frame-producer and
+        // renderer threads spent the capture, aggregated by program counter.
+        if (self->_schedulingURL) {
+            NSURL *profileURL = [self->_schedulingURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:
+                [self->_schedulingURL.lastPathComponent stringByReplacingOccurrencesOfString:@"frame-scheduling-"
+                                                                                  withString:@"pc-profile-"]];
+            rex_pc_profile_write_csv(profileURL.fileSystemRepresentation);
+        }
     });
     [self updateFrameTimeHUD];
     [self record:@"capture.long_stopped"];

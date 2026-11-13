@@ -449,6 +449,9 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
     _twoCoreRendering = [UISwitch new];
     _twoCoreRendering.onTintColor = Ink(0x35CDD1);
     _twoCoreRendering.accessibilityIdentifier = @"settings.twoCoreRendering";
+    _heatGuard = [UISwitch new];
+    _heatGuard.onTintColor = Ink(0x35CDD1);
+    _heatGuard.accessibilityIdentifier = @"settings.heatGuard";
     _performanceCapture = [UISwitch new];
     _performanceCapture.onTintColor = Ink(0xB6884D);
     _performanceCapture.accessibilityIdentifier = @"settings.performanceCapture";
@@ -466,6 +469,7 @@ static UISegmentedControl *ChoiceControl(NSArray<NSString *> *items, NSString *i
         Copy(@"Native ARM64 game code. Your game files. Your city.", 17, NO),
         [self setting:@"SKIP INTRO VIDEOS" detail:@"Skip opening credits and Rockstar logos at the next launch. Game loading still completes normally." toggle:_skipIntro],
         [self setting:@"TWO-CORE RENDERING" detail:@"Encodes each frame for the GPU on a second CPU core while the next frame is prepared, for steadier frame rates in busy areas. Adds about one frame of delay. Turn off if you see flicker or missing graphics. Applies at the next launch." toggle:_twoCoreRendering],
+        [self setting:@"HEAT GUARD" detail:@"When the phone gets hot, shortens draw and shadow distance to hold the frame rate and slow the heating, then restores your settings once it cools. Changes apply while you play." toggle:_heatGuard],
         Copy(@"Optimized for normal play. Development logging and probes stay off. Optional graphs and performance captures are available in the launcher.", 12, NO),
         [self setting:@"LONG PERFORMANCE CAPTURE" detail:@"Off each time the app opens. Enable before Play for up to 5 minutes of timing, without development probes. Turn on the frame-time graph to mark a spike or stop and save; capture also saves when the app goes into the background. Data stays in memory during play." toggle:_performanceCapture],
         _downloadLogButton,

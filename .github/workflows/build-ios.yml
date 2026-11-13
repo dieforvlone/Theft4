@@ -243,6 +243,18 @@ jobs:
           echo "name=${name}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           echo "$name"
 
+      # Program-counter profiles in captures are matched to these addresses.
+      - name: Save the symbol list
+        working-directory: Theft4
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          binary="out/build/ios-device-release/theft4/Release/Theft4.app/Theft4"
+          xcrun nm -n "$binary" | grep -E ' [tT] ' > dist/Theft4-symbols.txt || true
+          echo "text symbols: $(wc -l < dist/Theft4-symbols.txt)"
+          echo "guest functions: $(grep -c rex_generated_sub_ dist/Theft4-symbols.txt || true)"
+          gzip -9 dist/Theft4-symbols.txt
+
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
@@ -250,6 +262,7 @@ jobs:
           path: |
             Theft4/dist/*.ipa
             Theft4/dist/*.sha256
+            Theft4/dist/Theft4-symbols.txt.gz
           if-no-files-found: error
           retention-days: 30
 

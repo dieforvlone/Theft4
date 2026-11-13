@@ -11,7 +11,14 @@
 #include <pthread.h>
 #include <pthread/qos.h>
 #include <mach/mach.h>
+#include <mach-o/dyld.h>
+#include <unistd.h>
 #endif
+#include <cstdio>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 
 // This comparison is an iOS integration; other SDK hosts retain no-op hooks.
 #if defined(__APPLE__) && TARGET_OS_IPHONE
@@ -62,6 +69,10 @@ struct alignas(128) Ring {
 };
 Ring rings[kThreads];
 std::atomic<uint32_t> registrations{0}, witness_slots{0};
+// Per-ring identity for the sampler: mach port, thread id and current roles.
+std::array<std::atomic<uint32_t>, kThreads> ring_ports{};
+std::array<std::atomic<uint64_t>, kThreads> ring_ids{};
+std::array<std::atomic<uint32_t>, kThreads> ring_roles{};
 uint64_t Now() {
   const auto hz = rex::chrono::Clock::QueryHostTickFrequency();
   const auto ticks = rex::chrono::Clock::QueryHostTickCount();
@@ -85,6 +96,7 @@ struct Local {
   uint64_t calls[7]{};
   uint64_t witness_start = 0, witness_cpu = 0;
   std::unique_ptr<std::array<uint64_t, kBufferWords>> buffer;
+  uint32_t slot = UINT32_MAX;
 #if defined(__APPLE__) && TARGET_OS_IPHONE
   pthread_override_t override = nullptr;
   ~Local() {
@@ -102,8 +114,19 @@ void Register() {
   pthread_threadid_np(nullptr, &local.id);
 #endif
   const uint32_t n = registrations.fetch_add(1, std::memory_order_relaxed);
-  if (n < kThreads)
+  if (n < kThreads) {
     local.ring = &rings[n];
+    local.slot = n;
+    ring_ids[n].store(local.id, std::memory_order_relaxed);
+#if defined(__APPLE__)
+    // Keep this send right for the process lifetime; the sampler uses it.
+    ring_ports[n].store(mach_thread_self(), std::memory_order_release);
+#endif
+  }
+}
+void SyncRoles() {
+  if (local.slot < kThreads)
+    ring_roles[local.slot].store(local.roles, std::memory_order_release);
 }
 void Push(const rex_frame_scheduling_sample& row) {
   auto* q = local.ring;
@@ -286,11 +309,13 @@ void RegisterGuest(uint32_t id, uint32_t entry, uint32_t cpu, int32_t priority, 
   local.guest_cpu = cpu;
   local.guest_priority = priority;
   local.roles |= Guest | (main ? MainGuest : 0);
+  SyncRoles();
   Identity(1);
 }
 void MarkAudio() {
   Register();
   local.roles |= Audio;
+  SyncRoles();
   local.applied = UINT64_MAX;
   Apply();
   Identity(1);
@@ -301,6 +326,7 @@ void FrameBoundary(Role role, uint64_t frame, uint32_t caller) {
   local.caller = caller;
   if (!(local.roles & role)) {
     local.roles |= role;
+    SyncRoles();
     local.applied = UINT64_MAX;
     Identity(1);
   }
@@ -345,8 +371,114 @@ void EndWork(CpuToken token) {
   row.value[Site] = token.site;
   Push(row);
 }
+namespace profile {
+// One sample: program counter and link register of a sampled thread, or
+// pc == 0 when the thread was waiting. Pushed after the thread resumes, into
+// storage reserved before sampling starts, so a suspended thread can never
+// hold a lock this sampler needs.
+struct Sample {
+  uint64_t pc = 0, lr = 0;
+  uint32_t slot = 0, roles = 0;
+};
+constexpr size_t kMaxSamples = 400000;
+constexpr uint32_t kIntervalUs = 4000;
+constexpr uint32_t kSampledRoles = MainGuest | FrameProducer | NativeRenderer;
+std::mutex mutex;
+std::vector<Sample> samples;
+std::once_flag started;
+void Loop() {
+#if defined(__APPLE__)
+  pthread_setname_np("Theft4 profiler");
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+  for (;;) {
+    if (!capturing.load(std::memory_order_acquire)) {
+      usleep(50000);
+      continue;
+    }
+    const uint32_t n = std::min(registrations.load(std::memory_order_relaxed), kThreads);
+    for (uint32_t i = 0; i < n; ++i) {
+      const uint32_t roles = ring_roles[i].load(std::memory_order_acquire);
+      const mach_port_t port = ring_ports[i].load(std::memory_order_acquire);
+      if (!(roles & kSampledRoles) || !port)
+        continue;
+      thread_basic_info_data_t info{};
+      mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+      if (thread_info(port, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &count) !=
+          KERN_SUCCESS)
+        continue;
+      Sample sample;
+      sample.slot = i;
+      sample.roles = roles;
+      if (info.run_state == TH_STATE_RUNNING && thread_suspend(port) == KERN_SUCCESS) {
+        arm_thread_state64_t state{};
+        mach_msg_type_number_t state_count = ARM_THREAD_STATE64_COUNT;
+        if (thread_get_state(port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state),
+                             &state_count) == KERN_SUCCESS) {
+          sample.pc = uint64_t(arm_thread_state64_get_pc(state));
+          sample.lr = uint64_t(arm_thread_state64_get_lr(state));
+        }
+        thread_resume(port);
+        if (!sample.pc)
+          continue;
+      }
+      std::lock_guard lock(mutex);
+      if (samples.size() < samples.capacity())
+        samples.push_back(sample);
+    }
+    usleep(kIntervalUs);
+  }
+}
+void Start() {
+  {
+    std::lock_guard lock(mutex);
+    samples.clear();
+    samples.reserve(kMaxSamples);
+  }
+  std::call_once(started, [] { std::thread(Loop).detach(); });
+}
+}  // namespace profile
 }  // namespace rex::diagnostics::frame_schedule
 using namespace rex::diagnostics::frame_schedule;
+extern "C" int rex_pc_profile_write_csv(const char* path) {
+  if (!path)
+    return -1;
+  std::vector<profile::Sample> copy;
+  {
+    std::lock_guard lock(profile::mutex);
+    copy = profile::samples;
+  }
+  struct Key {
+    uint32_t slot, state;
+    uint64_t pc, lr;
+    bool operator==(const Key&) const = default;
+  };
+  struct Hash {
+    size_t operator()(const Key& k) const {
+      return std::hash<uint64_t>()(k.pc * 31 + k.lr) ^ (size_t(k.slot) << 1) ^ k.state;
+    }
+  };
+  std::unordered_map<Key, uint64_t, Hash> counts;
+  for (const auto& s : copy)
+    ++counts[{s.slot, s.pc ? 0u : 1u, s.pc, s.pc ? s.lr : 0}];
+  FILE* file = std::fopen(path, "w");
+  if (!file)
+    return -1;
+  std::fprintf(file,
+               "# pc-profile: interval_us=%u samples=%zu image_base=0x%llx; roles 2=main guest "
+               "4=native renderer 8=frame producer; state 0=running (pc/lr absolute) 1=waiting\n"
+               "slot,thread_id,roles,state,pc,lr,count\n",
+               profile::kIntervalUs, copy.size(),
+               (unsigned long long)(uintptr_t)_dyld_get_image_header(0));
+  for (const auto& [key, count] : counts)
+    std::fprintf(file, "%u,%llu,%u,%u,0x%llx,0x%llx,%llu\n", key.slot,
+                 (unsigned long long)ring_ids[key.slot].load(std::memory_order_relaxed),
+                 ring_roles[key.slot].load(std::memory_order_relaxed), key.state,
+                 (unsigned long long)key.pc, (unsigned long long)key.lr,
+                 (unsigned long long)count);
+  std::fclose(file);
+  return int(copy.size());
+}
 extern "C" void rex_frame_scheduling_set_mode(int enabled) {
   uint64_t old = configuration.load(std::memory_order_relaxed), next;
   do {
@@ -363,8 +495,10 @@ extern "C" uint64_t rex_frame_scheduling_generation() {
   return configuration.load(std::memory_order_acquire) >> 1;
 }
 extern "C" void rex_frame_scheduling_capture(int enabled) {
-  if (enabled)
+  if (enabled) {
     capture_epoch.fetch_add(1, std::memory_order_relaxed);
+    profile::Start();
+  }
   capturing.store(enabled != 0, std::memory_order_release);
 }
 extern "C" void rex_frame_scheduling_active(int value) {
@@ -428,6 +562,9 @@ extern "C" uint32_t rex_frame_scheduling_read(uint32_t*, rex_frame_scheduling_sa
 }
 extern "C" uint64_t rex_frame_scheduling_dropped() {
   return 0;
+}
+extern "C" int rex_pc_profile_write_csv(const char*) {
+  return -1;
 }
 extern "C" const char* rex_frame_scheduling_columns() {
   return "";

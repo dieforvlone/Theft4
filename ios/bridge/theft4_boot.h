@@ -46,6 +46,11 @@ int theft4_prepare_game(const char* game_directory, const char* support_director
 // setup, with no other runtime active. Missing media/UI exports stop the app.
 int theft4_start_game(const char* game_directory, const char* support_directory,
                      theft4_boot_event_fn event, void* context);
+// Heat Guard. Call on the main thread whenever the thermal state changes
+// (0 nominal, 1 fair, 2 serious, 3 critical) while the game runs. At serious
+// and above it shortens the draw and shadow distances chosen at launch; below
+// serious it restores them. No effect before the game starts.
+void theft4_heat_guard_apply(int thermal_state);
 #ifdef __cplusplus
 }
 #endif
