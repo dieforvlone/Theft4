@@ -6177,8 +6177,26 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
         full_validation ? NativeBufferShadowValidationRange{0, data_size, 0, true}
                         : GetNativeBufferShadowValidationRange(data_size, validation_offset);
     if(NativeDevelopmentDiagnosticsEnabled())buffer_shadow_validation_count_.fetch_add(1, std::memory_order_relaxed);
-    if (NativeBufferShadowPayloadRangeMatches(data, clean_cache_entry->payload.data(), data_size,
-                                              validation_range)) {
+    bool clean_matches = NativeBufferShadowPayloadRangeMatches(
+        data, clean_cache_entry->payload.data(), data_size, validation_range);
+    if (clean_matches && !full_validation) {
+      // Larger buffers also get 32 small probes spread across the whole
+      // payload, at a phase that moves with the sweep. Deformation (such as
+      // the player's high-detail vehicle body) moves many vertices across a
+      // buffer, so a probe lands on changed bytes within a frame or two
+      // instead of waiting for the sweep to reach them.
+      constexpr size_t kProbes = 32, kProbeBytes = 64;
+      const size_t stride = data_size / kProbes;
+      const size_t phase = stride > kProbeBytes ? (validation_offset % (stride - kProbeBytes)) : 0;
+      const uint8_t* captured = clean_cache_entry->payload.data();
+      for (size_t probe = 0; clean_matches && probe < kProbes; ++probe) {
+        const size_t offset = probe * stride + phase;
+        if (offset >= data_size) break;
+        const size_t length = std::min(kProbeBytes, data_size - offset);
+        clean_matches = std::memcmp(data + offset, captured + offset, length) == 0;
+      }
+    }
+    if (clean_matches) {
       clean_cache_entry->shadow_validation_offset.store(validation_range.next_offset,
                                                         std::memory_order_relaxed);
       if(NativeDevelopmentDiagnosticsEnabled())buffer_capture_reuse_count_.fetch_add(1, std::memory_order_relaxed);
