@@ -185,6 +185,10 @@ class AuthoritativeConstantState {
 
     ConstantPayloadDelta changed_delta;
     changed_delta.complete_snapshot = !initialized_;
+    // Reserve once: appending range by range otherwise reallocates the
+    // payload several times per draw on the render worker.
+    changed_delta.ranges.reserve(delta.ranges.size());
+    changed_delta.payload.reserve(delta.payload.size());
     for (const ConstantDeltaRange& range : delta.ranges) {
       const uint8_t* source = delta.payload.data() + range.payload_offset;
       uint8_t* destination = canonical_.data() + range.destination_offset;
