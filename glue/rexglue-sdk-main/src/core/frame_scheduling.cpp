@@ -73,6 +73,7 @@ std::atomic<uint32_t> registrations{0}, witness_slots{0};
 std::array<std::atomic<uint32_t>, kThreads> ring_ports{};
 std::array<std::atomic<uint64_t>, kThreads> ring_ids{};
 std::array<std::atomic<uint32_t>, kThreads> ring_roles{};
+std::array<std::atomic<uint32_t>, kThreads> ring_entries{};
 uint64_t Now() {
   const auto hz = rex::chrono::Clock::QueryHostTickFrequency();
   const auto ticks = rex::chrono::Clock::QueryHostTickCount();
@@ -125,8 +126,10 @@ void Register() {
   }
 }
 void SyncRoles() {
-  if (local.slot < kThreads)
+  if (local.slot < kThreads) {
+    ring_entries[local.slot].store(local.entry, std::memory_order_relaxed);
     ring_roles[local.slot].store(local.roles, std::memory_order_release);
+  }
 }
 void Push(const rex_frame_scheduling_sample& row) {
   auto* q = local.ring;
@@ -372,19 +375,29 @@ void EndWork(CpuToken token) {
   Push(row);
 }
 namespace profile {
-// One sample: program counter and link register of a sampled thread, or
-// pc == 0 when the thread was waiting. Pushed after the thread resumes, into
-// storage reserved before sampling starts, so a suspended thread can never
-// hold a lock this sampler needs.
-struct Sample {
-  uint64_t pc = 0, lr = 0;
-  uint32_t slot = 0, roles = 0;
+// Samples every registered guest thread and the native renderer about 100
+// times per second while capture is on. Each sample is the program counter of
+// a running thread, or "waiting". Samples are aggregated by thread, 10-second
+// time slice and program counter. Aggregation happens after the sampled
+// thread resumes, so a suspended thread can never hold a lock (including the
+// allocator's) that this sampler needs.
+constexpr uint32_t kIntervalUs = 10000;
+constexpr uint64_t kSliceNs = 10000000000ull;
+constexpr uint32_t kSampledRoles = Guest | MainGuest | FrameProducer | NativeRenderer;
+constexpr size_t kMaxKeys = 400000;
+struct Key {
+  uint32_t slot = 0, slice = 0;
+  uint64_t pc = 0;  // 0 = waiting
+  bool operator==(const Key&) const = default;
 };
-constexpr size_t kMaxSamples = 400000;
-constexpr uint32_t kIntervalUs = 4000;
-constexpr uint32_t kSampledRoles = MainGuest | FrameProducer | NativeRenderer;
+struct KeyHash {
+  size_t operator()(const Key& k) const {
+    return std::hash<uint64_t>()(k.pc ^ (uint64_t(k.slot) << 48) ^ (uint64_t(k.slice) << 32));
+  }
+};
 std::mutex mutex;
-std::vector<Sample> samples;
+std::unordered_map<Key, uint64_t, KeyHash> counts;
+uint64_t total_samples = 0, dropped_samples = 0, start_ns = 0;
 std::once_flag started;
 void Loop() {
 #if defined(__APPLE__)
@@ -397,6 +410,12 @@ void Loop() {
       continue;
     }
     const uint32_t n = std::min(registrations.load(std::memory_order_relaxed), kThreads);
+    uint64_t start;
+    {
+      std::lock_guard lock(mutex);
+      start = start_ns;
+    }
+    const uint32_t slice = uint32_t((Now() - start) / kSliceNs);
     for (uint32_t i = 0; i < n; ++i) {
       const uint32_t roles = ring_roles[i].load(std::memory_order_acquire);
       const mach_port_t port = ring_ports[i].load(std::memory_order_acquire);
@@ -407,24 +426,24 @@ void Loop() {
       if (thread_info(port, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &count) !=
           KERN_SUCCESS)
         continue;
-      Sample sample;
-      sample.slot = i;
-      sample.roles = roles;
+      uint64_t pc = 0;
       if (info.run_state == TH_STATE_RUNNING && thread_suspend(port) == KERN_SUCCESS) {
         arm_thread_state64_t state{};
         mach_msg_type_number_t state_count = ARM_THREAD_STATE64_COUNT;
         if (thread_get_state(port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state),
-                             &state_count) == KERN_SUCCESS) {
-          sample.pc = uint64_t(arm_thread_state64_get_pc(state));
-          sample.lr = uint64_t(arm_thread_state64_get_lr(state));
-        }
+                             &state_count) == KERN_SUCCESS)
+          pc = uint64_t(arm_thread_state64_get_pc(state));
         thread_resume(port);
-        if (!sample.pc)
+        if (!pc)
           continue;
       }
       std::lock_guard lock(mutex);
-      if (samples.size() < samples.capacity())
-        samples.push_back(sample);
+      ++total_samples;
+      const Key key{i, slice, pc};
+      auto it = counts.find(key);
+      if (it != counts.end()) ++it->second;
+      else if (counts.size() < kMaxKeys) counts.emplace(key, 1);
+      else ++dropped_samples;
     }
     usleep(kIntervalUs);
   }
@@ -432,8 +451,10 @@ void Loop() {
 void Start() {
   {
     std::lock_guard lock(mutex);
-    samples.clear();
-    samples.reserve(kMaxSamples);
+    counts.clear();
+    counts.reserve(65536);
+    total_samples = dropped_samples = 0;
+    start_ns = Now();
   }
   std::call_once(started, [] { std::thread(Loop).detach(); });
 }
@@ -443,41 +464,37 @@ using namespace rex::diagnostics::frame_schedule;
 extern "C" int rex_pc_profile_write_csv(const char* path) {
   if (!path)
     return -1;
-  std::vector<profile::Sample> copy;
+  std::vector<std::pair<profile::Key, uint64_t>> rows;
+  uint64_t total, dropped;
   {
     std::lock_guard lock(profile::mutex);
-    copy = profile::samples;
+    rows.assign(profile::counts.begin(), profile::counts.end());
+    total = profile::total_samples;
+    dropped = profile::dropped_samples;
   }
-  struct Key {
-    uint32_t slot, state;
-    uint64_t pc, lr;
-    bool operator==(const Key&) const = default;
-  };
-  struct Hash {
-    size_t operator()(const Key& k) const {
-      return std::hash<uint64_t>()(k.pc * 31 + k.lr) ^ (size_t(k.slot) << 1) ^ k.state;
-    }
-  };
-  std::unordered_map<Key, uint64_t, Hash> counts;
-  for (const auto& s : copy)
-    ++counts[{s.slot, s.pc ? 0u : 1u, s.pc, s.pc ? s.lr : 0}];
   FILE* file = std::fopen(path, "w");
   if (!file)
     return -1;
   std::fprintf(file,
-               "# pc-profile: interval_us=%u samples=%zu image_base=0x%llx; roles 2=main guest "
-               "4=native renderer 8=frame producer; state 0=running (pc/lr absolute) 1=waiting\n"
-               "slot,thread_id,roles,state,pc,lr,count\n",
-               profile::kIntervalUs, copy.size(),
+               "# pc-profile v2: interval_us=%u slice_s=10 samples=%llu dropped=%llu "
+               "image_base=0x%llx; roles 1=guest 2=main guest 4=native renderer 8=frame "
+               "producer 16=audio; pc 0x0 = waiting\n",
+               profile::kIntervalUs, (unsigned long long)total, (unsigned long long)dropped,
                (unsigned long long)(uintptr_t)_dyld_get_image_header(0));
-  for (const auto& [key, count] : counts)
-    std::fprintf(file, "%u,%llu,%u,%u,0x%llx,0x%llx,%llu\n", key.slot,
-                 (unsigned long long)ring_ids[key.slot].load(std::memory_order_relaxed),
-                 ring_roles[key.slot].load(std::memory_order_relaxed), key.state,
-                 (unsigned long long)key.pc, (unsigned long long)key.lr,
-                 (unsigned long long)count);
+  // One line per sampled thread: identity for naming game threads.
+  const uint32_t n = std::min(registrations.load(std::memory_order_relaxed), kThreads);
+  for (uint32_t i = 0; i < n; ++i)
+    if (ring_roles[i].load(std::memory_order_relaxed) & profile::kSampledRoles)
+      std::fprintf(file, "# thread slot=%u id=%llu roles=%u entry=0x%08x\n", i,
+                   (unsigned long long)ring_ids[i].load(std::memory_order_relaxed),
+                   ring_roles[i].load(std::memory_order_relaxed),
+                   ring_entries[i].load(std::memory_order_relaxed));
+  std::fprintf(file, "slot,slice,pc,count\n");
+  for (const auto& [key, count] : rows)
+    std::fprintf(file, "%u,%u,0x%llx,%llu\n", key.slot, key.slice,
+                 (unsigned long long)key.pc, (unsigned long long)count);
   std::fclose(file);
-  return int(copy.size());
+  return int(total);
 }
 extern "C" void rex_frame_scheduling_set_mode(int enabled) {
   uint64_t old = configuration.load(std::memory_order_relaxed), next;
