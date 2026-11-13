@@ -1,3 +1,4 @@
+#include <errno.h>
 #include "../bridge/theft4_retail_mode.h"
 #import <UIKit/UIKit.h>
 #import <GameController/GameController.h>
@@ -545,6 +546,7 @@ static BOOL Theft4InstallSaveExport(NSURL *selected, NSURL *support, NSURL *docu
     NSURL *_schedulingURL;
     NSMutableString *_schedulingRows; // serial export queue owns capture storage
     NSUInteger _schedulingBytes;
+    NSUInteger _pcProfileTicks; // capture queue only
     BOOL _schedulingFull;
     dispatch_source_t _runtimeCallerTimer;
     NSURL *_runtimeCallerURL;
@@ -3093,6 +3095,9 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 // sampled wall time (including descheduling), not CPU time or a full stack trace.
 - (void)collectRuntimeCallers {
     [self collectFrameScheduling];
+    // Keep the main-thread profile on disk during the capture (every 10 s), so
+    // it survives however the capture or the app ends.
+    if (++_pcProfileTicks % 10 == 0) [self writePCProfile];
     if (_runtimeCallerFull || !_runtimeCallerRows) return;
     const uint64_t now = (uint64_t)(CACurrentMediaTime() * 1e9);
     const uint64_t frame = theft4_frame_counter_published_frames();
@@ -3292,11 +3297,20 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 // threads spent the capture, aggregated by program counter. Written on every
 // way a capture ends, including Exit to Launcher.
 - (void)writePCProfile {
-    if (!_schedulingURL) return;
+    if (!_schedulingURL) {
+        [self appendPublicationCaptureText:@"status,,,,pc-profile-skipped-no-scheduling-url\n"];
+        return;
+    }
     NSURL *profileURL = [_schedulingURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:
         [_schedulingURL.lastPathComponent stringByReplacingOccurrencesOfString:@"frame-scheduling-"
                                                                     withString:@"pc-profile-"]];
-    rex_pc_profile_write_csv(profileURL.fileSystemRepresentation);
+    errno = 0;
+    const int written = rex_pc_profile_write_csv(profileURL.fileSystemRepresentation);
+    const int saved_errno = errno;
+    // Record each attempt in the capture so a missing profile explains itself.
+    [self appendPublicationCaptureText:[NSString stringWithFormat:
+        @"status,,,,pc-profile samples=%d errno=%d file=%@\n", written, written < 0 ? saved_errno : 0,
+        profileURL.lastPathComponent]];
 }
 
 - (void)stopPublicationCapture {
