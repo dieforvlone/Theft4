@@ -623,6 +623,7 @@ static BOOL Theft4InstallSaveExport(NSURL *selected, NSURL *support, NSURL *docu
 - (void)twoCoreRenderingChanged:(UISwitch *)sender;
 - (void)heatGuardChanged:(UISwitch *)sender;
 - (void)applyHeatGuard;
+- (void)writePCProfile;
 - (void)syncGraphicsProfileForVersion:(NSInteger)version;
 - (void)reloadGraphicsControlsFromDefaults;
 - (void)downloadLatestLogCapture;
@@ -2897,8 +2898,10 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     // Once explicit writes/settings are drained, terminate without destructors.
     dispatch_queue_t captureQueue = _publicationCaptureQueue;
     if (captureQueue) {
+        const BOOL profileCapture = _publicationCaptureActive || _schedulingURL != nil;
         dispatch_async(captureQueue, ^{
             [self appendPublicationCaptureText:@"status,,,,saved-on-quit\n"];
+            if (profileCapture) [self writePCProfile];
             dispatch_async(dispatch_get_main_queue(), ^{ _Exit(0); });
         });
     } else {
@@ -3285,6 +3288,17 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     return YES;
 }
 
+// Main-thread profile: where the main guest, frame-producer and renderer
+// threads spent the capture, aggregated by program counter. Written on every
+// way a capture ends, including Exit to Launcher.
+- (void)writePCProfile {
+    if (!_schedulingURL) return;
+    NSURL *profileURL = [_schedulingURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:
+        [_schedulingURL.lastPathComponent stringByReplacingOccurrencesOfString:@"frame-scheduling-"
+                                                                    withString:@"pc-profile-"]];
+    rex_pc_profile_write_csv(profileURL.fileSystemRepresentation);
+}
+
 - (void)stopPublicationCapture {
     if (!_publicationCaptureActive) return;
     rex_frame_scheduling_capture(0);
@@ -3300,14 +3314,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2), _publicationCaptureQueue, ^{
         [self collectFrameScheduling];
         [self flushFrameScheduling];
-        // Main-thread profile: where the main guest, frame-producer and
-        // renderer threads spent the capture, aggregated by program counter.
-        if (self->_schedulingURL) {
-            NSURL *profileURL = [self->_schedulingURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:
-                [self->_schedulingURL.lastPathComponent stringByReplacingOccurrencesOfString:@"frame-scheduling-"
-                                                                                  withString:@"pc-profile-"]];
-            rex_pc_profile_write_csv(profileURL.fileSystemRepresentation);
-        }
+        [self writePCProfile];
     });
     [self updateFrameTimeHUD];
     [self record:@"capture.long_stopped"];
