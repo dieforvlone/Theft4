@@ -12,6 +12,7 @@
 #include <pthread/qos.h>
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
+#include <mach/mach_vm.h>
 #include <unistd.h>
 #endif
 #include <cstdio>
@@ -401,6 +402,11 @@ std::mutex mutex;
 std::unordered_map<Key, uint64_t, KeyHash> counts;
 uint64_t total_samples = 0, dropped_samples = 0, start_ns = 0;
 std::once_flag started;
+// Theft4's own executable image (the game code, renderer and runtime).
+bool InImage(uint64_t address) {
+  static const uint64_t base = uint64_t(uintptr_t(_dyld_get_image_header(0)));
+  return address >= base && address < base + 0x10000000ull;
+}
 void Loop() {
 #if defined(__APPLE__)
   pthread_setname_np("Theft4 profiler");
@@ -428,7 +434,7 @@ void Loop() {
       if (thread_info(port, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &count) !=
           KERN_SUCCESS)
         continue;
-      uint64_t pc = 0, lr = 0;
+      uint64_t pc = 0, lr = 0, fp = 0;
       if (info.run_state == TH_STATE_RUNNING && thread_suspend(port) == KERN_SUCCESS) {
         arm_thread_state64_t state{};
         mach_msg_type_number_t state_count = ARM_THREAD_STATE64_COUNT;
@@ -437,8 +443,27 @@ void Loop() {
         {
           pc = uint64_t(arm_thread_state64_get_pc(state));
           lr = uint64_t(arm_thread_state64_get_lr(state));
+          fp = uint64_t(arm_thread_state64_get_fp(state));
         }
         thread_resume(port);
+        // Attribute time in system libraries to the first caller inside the
+        // app: walk a few frame records with checked reads (the thread runs
+        // again, so a stale frame simply ends the walk).
+        if (pc && !InImage(pc) && !InImage(lr)) {
+          for (int depth = 0; depth < 8 && fp; ++depth) {
+            uint64_t frame[2] = {0, 0};
+            mach_vm_size_t got = 0;
+            if (mach_vm_read_overwrite(mach_task_self(), fp, sizeof(frame),
+                                       reinterpret_cast<mach_vm_address_t>(frame), &got) !=
+                    KERN_SUCCESS ||
+                got != sizeof(frame))
+              break;
+            const uint64_t ret = frame[1] & 0x0000000FFFFFFFFFull;  // strip pointer auth
+            if (InImage(ret)) { lr = ret; break; }
+            if (frame[0] <= fp) break;
+            fp = frame[0];
+          }
+        }
         if (!pc)
           continue;
       }
@@ -483,7 +508,7 @@ extern "C" int rex_pc_profile_write_csv(const char* path) {
   std::fprintf(file,
                "# pc-profile v3: interval_us=%u slice_s=10 samples=%llu dropped=%llu "
                "image_base=0x%llx; roles 1=guest 2=main guest 4=native renderer 8=frame "
-               "producer 16=audio; pc 0x0 = waiting; lr = caller\n",
+               "producer 16=audio; pc 0x0 = waiting; lr = first caller inside the app\n",
                profile::kIntervalUs, (unsigned long long)total, (unsigned long long)dropped,
                (unsigned long long)(uintptr_t)_dyld_get_image_header(0));
   // One line per sampled thread: identity for naming game threads.

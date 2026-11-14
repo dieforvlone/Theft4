@@ -6203,8 +6203,11 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
     // Small buffers, and any the guest has already rewritten silently, are
     // compared in full: a slice-per-reuse sweep can miss vehicle deformation
     // for dozens of frames. Larger static buffers keep the bounded sweep.
-    constexpr size_t kFullValidationBytes = 16 * 1024;
-    const bool full_validation = volatile_handle || data_size <= kFullValidationBytes;
+    // Full comparison of every small buffer cost about 13% of the frame
+    // producer's busy time on device and caught no rewrites; buffers now get
+    // the bounded sweep plus spread-out probes, and only buffers already seen
+    // rewritten are compared in full.
+    const bool full_validation = volatile_handle;
     const NativeBufferShadowValidationRange validation_range =
         full_validation ? NativeBufferShadowValidationRange{0, data_size, 0, true}
                         : GetNativeBufferShadowValidationRange(data_size, validation_offset);
@@ -6214,7 +6217,7 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
     (full_validation ? g_buffer_counters.small_full_checks : g_buffer_counters.large_probe_checks)
         .fetch_add(1, std::memory_order_relaxed);
     if (clean_matches && !full_validation) {
-      // Larger buffers also get 32 small probes spread across the whole
+      // Buffers also get 32 small probes spread across the whole
       // payload, at a phase that moves with the sweep. Deformation (such as
       // the player's high-detail vehicle body) moves many vertices across a
       // buffer, so a probe lands on changed bytes within a frame or two
