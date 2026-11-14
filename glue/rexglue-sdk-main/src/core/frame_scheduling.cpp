@@ -438,7 +438,12 @@ void Loop() {
           KERN_SUCCESS)
         continue;
       uint64_t pc = 0, lr = 0, fp = 0;
-      if (info.run_state == TH_STATE_RUNNING && thread_suspend(port) == KERN_SUCCESS) {
+      // Running threads record where they run; waiting threads record pc 0
+      // with the app function they wait in, so a capture shows which handoff
+      // each thread is blocked on.
+      const bool running = info.run_state == TH_STATE_RUNNING;
+      const bool waiting = info.run_state == TH_STATE_WAITING;
+      if ((running || waiting) && thread_suspend(port) == KERN_SUCCESS) {
         arm_thread_state64_t state{};
         mach_msg_type_number_t state_count = ARM_THREAD_STATE64_COUNT;
         if (thread_get_state(port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state),
@@ -453,7 +458,7 @@ void Loop() {
         // app: walk a few frame records with checked reads (the thread runs
         // again, so a stale frame simply ends the walk).
         if (pc && !InImage(pc) && !InImage(lr)) {
-          for (int depth = 0; depth < 8 && fp; ++depth) {
+          for (int depth = 0; depth < (running ? 8 : 16) && fp; ++depth) {
             uint64_t frame[2] = {0, 0};
             vm_size_t got = 0;
             // vm_read_overwrite (not the mach_vm_* variant, which the iOS SDK
@@ -470,10 +475,15 @@ void Loop() {
         }
         if (!pc)
           continue;
+        if (waiting) {
+          if (!InImage(pc) && !InImage(lr)) lr = 0;  // walk found no app caller
+          else if (InImage(pc)) lr = pc;
+          pc = 0;
+        }
       }
       std::lock_guard lock(mutex);
       ++total_samples;
-      const Key key{i, slice, pc, pc ? lr : 0};
+      const Key key{i, slice, pc, lr};
       auto it = counts.find(key);
       if (it != counts.end()) ++it->second;
       else if (counts.size() < kMaxKeys) counts.emplace(key, 1);
@@ -510,9 +520,9 @@ extern "C" int rex_pc_profile_write_csv(const char* path) {
   if (!file)
     return -1;
   std::fprintf(file,
-               "# pc-profile v3: interval_us=%u slice_s=10 samples=%llu dropped=%llu "
+               "# pc-profile v4: interval_us=%u slice_s=10 samples=%llu dropped=%llu "
                "image_base=0x%llx; roles 1=guest 2=main guest 4=native renderer 8=frame "
-               "producer 16=audio; pc 0x0 = waiting; lr = first caller inside the app\n",
+               "producer 16=audio; pc 0x0 = waiting; lr = first caller inside the app (for pc 0, the app function waited in)\n",
                profile::kIntervalUs, (unsigned long long)total, (unsigned long long)dropped,
                (unsigned long long)(uintptr_t)_dyld_get_image_header(0));
   // One line per sampled thread: identity for naming game threads.
