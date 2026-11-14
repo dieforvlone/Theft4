@@ -13,6 +13,7 @@
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <dlfcn.h>
 #include <unistd.h>
 #endif
 #include <cstdio>
@@ -424,13 +425,24 @@ static uint64_t ImageTextSize(const mach_header* header) {
   }
   return 0;
 }
+// The image holding this code. Under a host app (for example LiveContainer)
+// Theft4 is loaded as a library, so image 0 is the host, not the game.
+static const mach_header* AppImage() {
+  static const mach_header* header = [] {
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<const void*>(&ImageTextSize), &info) && info.dli_fbase)
+      return static_cast<const mach_header*>(info.dli_fbase);
+    return _dyld_get_image_header(0);
+  }();
+  return header;
+}
 namespace profile {
 // Theft4's own executable code (the game code, renderer and runtime). Build
 // 159 used a fixed 256 MB window, which also matched other mappings above
 // the app and misattributed every wait.
 bool InImage(uint64_t address) {
-  static const uint64_t base = uint64_t(uintptr_t(_dyld_get_image_header(0)));
-  static const uint64_t size = ImageTextSize(_dyld_get_image_header(0));
+  static const uint64_t base = uint64_t(uintptr_t(AppImage()));
+  static const uint64_t size = ImageTextSize(AppImage());
   return address >= base && address < base + (size ? size : 0x10000000ull);
 }
 void Loop() {
@@ -546,11 +558,11 @@ extern "C" int rex_pc_profile_write_csv(const char* path) {
   if (!file)
     return -1;
   std::fprintf(file,
-               "# pc-profile v5: interval_us=%u slice_s=10 samples=%llu dropped=%llu "
+               "# pc-profile v6: interval_us=%u slice_s=10 samples=%llu dropped=%llu "
                "image_base=0x%llx; roles 1=guest 2=main guest 4=native renderer 8=frame "
                "producer 16=audio; pc 0x0 = waiting; lr = first caller inside the app (for pc 0, the app function waited in)\n",
                profile::kIntervalUs, (unsigned long long)total, (unsigned long long)dropped,
-               (unsigned long long)(uintptr_t)_dyld_get_image_header(0));
+               (unsigned long long)(uintptr_t)AppImage());
   // One line per sampled thread: identity for naming game threads.
   const uint32_t n = std::min(registrations.load(std::memory_order_relaxed), kThreads);
   for (uint32_t i = 0; i < n; ++i)

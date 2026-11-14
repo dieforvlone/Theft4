@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <dlfcn.h>
 #include "../bridge/theft4_retail_mode.h"
 #import <UIKit/UIKit.h>
 #import <GameController/GameController.h>
@@ -148,6 +149,14 @@ static NSString *Theft4FilesGamePath(void) {
 #else
     return [NSString stringWithFormat:@"On My iPhone/iPad → %@ → game", Theft4DisplayName()];
 #endif
+}
+
+// The image holding the game code. Under a host app (for example
+// LiveContainer) Theft4 is loaded as a library, so image 0 is the host.
+static const void *Theft4AppImageHeader(void) {
+    Dl_info info = {0};
+    if (dladdr((const void *)&Theft4AppImageHeader, &info) && info.dli_fbase) return info.dli_fbase;
+    return _dyld_get_image_header(0);
 }
 
 static BOOL Theft4WriteBytes(NSOutputStream *stream, const uint8_t *bytes,
@@ -3280,7 +3289,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         NSBundle.mainBundle.infoDictionary[@"CFBundleVersion"],
         THEFT4_DEFAULT_DIRECT_GUEST_CLOCK, THEFT4_DEFAULT_RUNTIME_WAIT_FIXES,
         (unsigned long long)rex_runtime_callers_frequency(),
-        (unsigned long long)(uintptr_t)_dyld_get_image_header(0)];
+        (unsigned long long)(uintptr_t)Theft4AppImageHeader()];
     if (![callerHeader writeToURL:_runtimeCallerURL atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
         [self record:@"capture.caller_start_failed"];
         return NO;

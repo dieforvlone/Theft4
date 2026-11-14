@@ -40,6 +40,7 @@
 #include <fcntl.h>
 #include <mach/mach_time.h>
 #include <mach-o/dyld.h>
+#include <dlfcn.h>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -218,8 +219,16 @@ extern "C" int RexSetFaultDiagnosticFileDescriptor(int fd) {
     errno = EINVAL;
     return -1;
   }
-  fault_image_slide.store(static_cast<uint64_t>(_dyld_get_image_vmaddr_slide(0)),
-                          std::memory_order_relaxed);
+  // Slide of the image holding this code: under a host app (for example
+  // LiveContainer) Theft4 is a library and image 0 is the host.
+  intptr_t slide = _dyld_get_image_vmaddr_slide(0);
+  Dl_info info{};
+  if (dladdr(reinterpret_cast<const void*>(&RexSetFaultDiagnosticFileDescriptor), &info) &&
+      info.dli_fbase) {
+    for (uint32_t i = 0, n = _dyld_image_count(); i < n; ++i)
+      if (_dyld_get_image_header(i) == info.dli_fbase) { slide = _dyld_get_image_vmaddr_slide(i); break; }
+  }
+  fault_image_slide.store(static_cast<uint64_t>(slide), std::memory_order_relaxed);
   fault_timebase_numer.store(timebase.numer, std::memory_order_relaxed);
   fault_timebase_denom.store(timebase.denom, std::memory_order_relaxed);
   int expected = -1;
