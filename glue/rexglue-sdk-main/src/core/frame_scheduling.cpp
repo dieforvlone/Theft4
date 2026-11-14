@@ -376,7 +376,7 @@ void EndWork(CpuToken token) {
   Push(row);
 }
 namespace profile {
-// Samples every registered guest thread and the native renderer about 100
+// Samples the main guest, frame-producer and native-renderer threads about 100
 // times per second while capture is on. Each sample is the program counter of
 // a running thread, or "waiting". Samples are aggregated by thread, 10-second
 // time slice and program counter. Aggregation happens after the sampled
@@ -384,7 +384,11 @@ namespace profile {
 // allocator's) that this sampler needs.
 constexpr uint32_t kIntervalUs = 10000;
 constexpr uint64_t kSliceNs = 10000000000ull;
-constexpr uint32_t kSampledRoles = Guest | MainGuest | FrameProducer | NativeRenderer;
+// Only the main guest, frame-producer and native-renderer threads: pausing
+// every guest thread 100 times per second stopped vehicle deformation on
+// device (dents returned with capture off), while sampling these three did
+// not (builds 149-150).
+constexpr uint32_t kSampledRoles = MainGuest | FrameProducer | NativeRenderer;
 constexpr size_t kMaxKeys = 400000;
 struct Key {
   uint32_t slot = 0, slice = 0;
