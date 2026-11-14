@@ -12,7 +12,6 @@
 #include <pthread/qos.h>
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
-#include <mach/mach_vm.h>
 #include <unistd.h>
 #endif
 #include <cstdio>
@@ -456,10 +455,11 @@ void Loop() {
         if (pc && !InImage(pc) && !InImage(lr)) {
           for (int depth = 0; depth < 8 && fp; ++depth) {
             uint64_t frame[2] = {0, 0};
-            mach_vm_size_t got = 0;
-            if (mach_vm_read_overwrite(mach_task_self(), fp, sizeof(frame),
-                                       reinterpret_cast<mach_vm_address_t>(frame), &got) !=
-                    KERN_SUCCESS ||
+            vm_size_t got = 0;
+            // vm_read_overwrite (not the mach_vm_* variant, which the iOS SDK
+            // does not offer) fails cleanly on an unmapped address.
+            if (vm_read_overwrite(mach_task_self(), vm_address_t(fp), sizeof(frame),
+                                  vm_address_t(uintptr_t(frame)), &got) != KERN_SUCCESS ||
                 got != sizeof(frame))
               break;
             const uint64_t ret = frame[1] & 0x0000000FFFFFFFFFull;  // strip pointer auth
