@@ -484,13 +484,15 @@ int theft4_start_game(const char* game_directory, const char* support_directory,
                     wait_policy == "1" ? "microsecond-deadline" : "build80-millisecond",
                     wait_policy == "1" ? "guest-increment" : "build80-host-query");
 
-        // Admit the next native command stream only after the previous CPU
-        // publication returns. Guest threads may continue other work, and the
-        // two independently owned GPU slots below still overlap CPU/GPU work.
-        // A fresh launch with 2 restores build 79's CPU admission behavior.
+        // Let the game queue one more frame while the renderer is still
+        // publishing the previous one. With 1 (builds 80-161) the build 161
+        // device profile showed the main thread blocked about 14% of the time
+        // in SubmitTitleCommand and the renderer idle about half the time: the
+        // two ran in turn instead of overlapping. 2 matches build 79; a launch
+        // with THEFT4_CPU_PRESENT_ADMISSION=1 restores the strict handoff.
         const char* cpu_admission_override = std::getenv("THEFT4_CPU_PRESENT_ADMISSION");
         const std::string_view cpu_admission =
-            cpu_admission_override ? cpu_admission_override : "1";
+            cpu_admission_override ? cpu_admission_override : "2";
         if (cpu_admission != "1" && cpu_admission != "2") {
             throw std::runtime_error("THEFT4_CPU_PRESENT_ADMISSION must be 1 or 2");
         }
