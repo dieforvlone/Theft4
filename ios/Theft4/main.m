@@ -185,21 +185,38 @@ static BOOL Theft4AppendDiagnosticFile(NSOutputStream *stream, NSURL *url, NSStr
     NSString *header = [NSString stringWithFormat:@"\n\n===== %@ (%llu bytes) =====\n",
                         label, fileSize];
     NSData *headerData = [header dataUsingEncoding:NSUTF8StringEncoding];
-    if (!headerData || headerData.length > *budget ||
-        !Theft4WriteBytes(stream, headerData.bytes, headerData.length, budget)) return NO;
+    if (!headerData) return NO;
+    if (headerData.length + fileSize > *budget) {
+        [skipped addObject:[NSString stringWithFormat:@"%@ (%llu bytes; export budget exceeded)",
+                             label, fileSize]];
+        return YES;
+    }
+    if (!Theft4WriteBytes(stream, headerData.bytes, headerData.length, budget)) return NO;
+    // Copy at most the size seen above: logs and capture files can still be
+    // growing (or be rewritten) while the export runs. A file that cannot be
+    // read is noted and skipped; only a failed write to the bundle is fatal.
     NSInputStream *input = [NSInputStream inputStreamWithURL:url];
     [input open];
     uint8_t buffer[64 * 1024];
-    BOOL success = YES;
-    while (success) {
-        NSInteger count = [input read:buffer maxLength:sizeof(buffer)];
-        if (count < 0) { success = NO; break; }
+    unsigned long long remaining = fileSize;
+    BOOL readFailed = NO;
+    while (remaining > 0) {
+        const NSUInteger want = (NSUInteger)MIN((unsigned long long)sizeof(buffer), remaining);
+        NSInteger count = [input read:buffer maxLength:want];
+        if (count < 0) { readFailed = YES; break; }
         if (count == 0) break;
-        success = Theft4WriteBytes(stream, buffer, (NSUInteger)count, budget);
+        if (!Theft4WriteBytes(stream, buffer, (NSUInteger)count, budget)) { [input close]; return NO; }
+        remaining -= (unsigned long long)count;
     }
     [input close];
-    if (success) [included addObject:label];
-    return success;
+    if (readFailed || remaining > 0) {
+        [skipped addObject:[NSString stringWithFormat:@"%@ (%s; %llu of %llu bytes copied)", label,
+                             readFailed ? "read failed" : "file shrank during export",
+                             fileSize - remaining, fileSize]];
+        return YES;
+    }
+    [included addObject:label];
+    return YES;
 }
 
 static BOOL Theft4DiagnosticTextExtension(NSString *extension) {
@@ -2742,7 +2759,10 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
                 (unsigned long)included.count, [included componentsJoinedByString:@"\n"],
                 (unsigned long)skipped.count, [skipped componentsJoinedByString:@"\n"],
                 (unsigned long)budget];
-            success = Theft4WriteString(stream, manifest, &budget);
+            // The manifest is not counted against the file budget, so a bundle
+            // filled to the limit still finishes.
+            NSUInteger manifestBudget = NSUIntegerMax;
+            success = Theft4WriteString(stream, manifest, &manifestBudget);
         }
         [stream close];
 
