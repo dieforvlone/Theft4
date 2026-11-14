@@ -292,6 +292,8 @@ class Gta4NativeGraphicsSystem final : public system::IGraphicsSystem {
     uint32_t created_frame = 0;
     mutable std::atomic<uint32_t> last_used_frame{0};
     mutable std::atomic<size_t> shadow_validation_offset{0};
+    // Frame stamp of the last clean sweep-and-probe pass (UINT32_MAX: none).
+    mutable std::atomic<uint32_t> validated_frame{UINT32_MAX};
     std::vector<uint8_t> payload;
     // Built only by the single render worker. Keeping conversions with the
     // immutable source generation makes their lifetime follow the guest

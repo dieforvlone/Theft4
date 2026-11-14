@@ -2728,7 +2728,9 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
             if (!success) break;
         }
 
-        for (NSString *directoryName in @[@"audio-timing", @"frame-captures"]) {
+        // Only the newest capture is exported (added above). Older captures
+        // stay on the device but no longer fill the bundle's 50 MB budget.
+        for (NSString *directoryName in @[@"audio-timing"]) {
             NSURL *directoryURL = [startupURL URLByAppendingPathComponent:directoryName
                                                                isDirectory:YES];
             NSDirectoryEnumerator *enumerator =
@@ -2742,9 +2744,10 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
                 NSNumber *regular = nil;
                 [url getResourceValue:&regular forKey:NSURLIsRegularFileKey error:nil];
                 if (!regular.boolValue || !Theft4DiagnosticTextExtension(url.pathExtension)) continue;
+                // The enumerator can report /private/var paths for a /var
+                // directory URL, so the label uses the file name.
                 NSString *label = [NSString stringWithFormat:@"Theft4/startup/%@/%@",
-                                   directoryName,
-                                   [url.path substringFromIndex:directoryURL.path.length + 1]];
+                                   directoryName, url.lastPathComponent];
                 success = success && Theft4AppendDiagnosticFile(stream, url, label,
                                                                   &budget, included, skipped);
                 if (!success) break;

@@ -6077,7 +6077,8 @@ namespace {
 // a performance capture shows whether guest rewrites (vehicle dents) are seen.
 struct NativeBufferCaptureCounters {
   std::atomic<uint64_t> calls{0}, clean_reuses{0}, clean_mismatches{0}, full_compares{0},
-      full_matches{0}, recaptures{0}, small_full_checks{0}, large_probe_checks{0};
+      full_matches{0}, recaptures{0}, small_full_checks{0}, large_probe_checks{0},
+      same_frame_skips{0};
   std::atomic<uint64_t> last_log_ns{0};
 };
 NativeBufferCaptureCounters g_buffer_counters;
@@ -6093,10 +6094,12 @@ void LogNativeBufferCountersIfDue() {
       mismatches = take(g_buffer_counters.clean_mismatches),
       compares = take(g_buffer_counters.full_compares), matches = take(g_buffer_counters.full_matches),
       recaptures = take(g_buffer_counters.recaptures), small = take(g_buffer_counters.small_full_checks),
-      large = take(g_buffer_counters.large_probe_checks);
+      large = take(g_buffer_counters.large_probe_checks),
+      same_frame = take(g_buffer_counters.same_frame_skips);
   REXLOG_WARN("gta4-native-buffers: calls={} clean-reuses={} clean-mismatches={} small-full-checks={} "
-              "large-probe-checks={} dirty-full-compares={} dirty-unchanged={} recaptures={}",
-              calls, reuses, mismatches, small, large, compares, matches, recaptures);
+              "large-probe-checks={} same-frame-skips={} dirty-full-compares={} dirty-unchanged={} "
+              "recaptures={}",
+              calls, reuses, mismatches, small, large, same_frame, compares, matches, recaptures);
 }
 }  // namespace
 std::shared_ptr<const Gta4NativeGraphicsSystem::NativeBufferResource>
@@ -6198,6 +6201,18 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
   if (can_reuse_clean_capture) {
     const auto& clean_cache_entry = matching_cache_entry;
     if(NativeDevelopmentDiagnosticsEnabled())buffer_fast_path_request_count_.fetch_add(1, std::memory_order_relaxed);
+    // The same buffers are captured thousands of times per frame (about
+    // 130,000 calls per second on device, none ever mismatching). A clean,
+    // non-volatile buffer already checked this frame is reused without
+    // another sweep and probe pass; a silent rewrite is still found on the
+    // next frame's first use.
+    const uint32_t frame = g_native_memory_profile_event_frame.load(std::memory_order_relaxed);
+    if (!volatile_handle &&
+        clean_cache_entry->validated_frame.load(std::memory_order_relaxed) == frame) {
+      g_buffer_counters.same_frame_skips.fetch_add(1, std::memory_order_relaxed);
+      clean_cache_entry->last_used_frame.store(frame, std::memory_order_relaxed);
+      return clean_cache_entry;
+    }
     const size_t validation_offset =
         clean_cache_entry->shadow_validation_offset.load(std::memory_order_relaxed);
     // Small buffers, and any the guest has already rewritten silently, are
@@ -6238,6 +6253,7 @@ Gta4NativeGraphicsSystem::CaptureBufferResource(uint32_t handle) {
     if (clean_matches) {
       clean_cache_entry->shadow_validation_offset.store(validation_range.next_offset,
                                                         std::memory_order_relaxed);
+      clean_cache_entry->validated_frame.store(frame, std::memory_order_relaxed);
       if(NativeDevelopmentDiagnosticsEnabled())buffer_capture_reuse_count_.fetch_add(1, std::memory_order_relaxed);
       clean_cache_entry->last_used_frame.store(
           g_native_memory_profile_event_frame.load(std::memory_order_relaxed),
