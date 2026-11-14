@@ -12,9 +12,11 @@
 #include <pthread/qos.h>
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
+#include <mach-o/loader.h>
 #include <unistd.h>
 #endif
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -405,10 +407,31 @@ std::mutex mutex;
 std::unordered_map<Key, uint64_t, KeyHash> counts;
 uint64_t total_samples = 0, dropped_samples = 0, start_ns = 0;
 std::once_flag started;
-// Theft4's own executable image (the game code, renderer and runtime).
+}  // namespace profile
+// Size of an image's __TEXT segment (its code), from the load commands.
+static uint64_t ImageTextSize(const mach_header* header) {
+  if (!header || header->magic != MH_MAGIC_64) return 0;
+  const auto* command = reinterpret_cast<const load_command*>(
+      reinterpret_cast<const uint8_t*>(header) + sizeof(mach_header_64));
+  for (uint32_t i = 0; i < header->ncmds; ++i) {
+    if (command->cmd == LC_SEGMENT_64) {
+      const auto* segment = reinterpret_cast<const segment_command_64*>(command);
+      if (!std::strncmp(segment->segname, SEG_TEXT, sizeof(segment->segname)))
+        return segment->vmsize;
+    }
+    command = reinterpret_cast<const load_command*>(
+        reinterpret_cast<const uint8_t*>(command) + command->cmdsize);
+  }
+  return 0;
+}
+namespace profile {
+// Theft4's own executable code (the game code, renderer and runtime). Build
+// 159 used a fixed 256 MB window, which also matched other mappings above
+// the app and misattributed every wait.
 bool InImage(uint64_t address) {
   static const uint64_t base = uint64_t(uintptr_t(_dyld_get_image_header(0)));
-  return address >= base && address < base + 0x10000000ull;
+  static const uint64_t size = ImageTextSize(_dyld_get_image_header(0));
+  return address >= base && address < base + (size ? size : 0x10000000ull);
 }
 void Loop() {
 #if defined(__APPLE__)
@@ -437,7 +460,7 @@ void Loop() {
       if (thread_info(port, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &count) !=
           KERN_SUCCESS)
         continue;
-      uint64_t pc = 0, lr = 0, fp = 0;
+      uint64_t pc = 0, lr = 0, fp = 0, deepest = 0;
       // Running threads record where they run; waiting threads record pc 0
       // with the app function they wait in, so a capture shows which handoff
       // each thread is blocked on.
@@ -469,6 +492,7 @@ void Loop() {
               break;
             const uint64_t ret = frame[1] & 0x0000000FFFFFFFFFull;  // strip pointer auth
             if (InImage(ret)) { lr = ret; break; }
+            if (waiting && ret) deepest = ret;
             if (frame[0] <= fp) break;
             fp = frame[0];
           }
@@ -476,7 +500,9 @@ void Loop() {
         if (!pc)
           continue;
         if (waiting) {
-          if (!InImage(pc) && !InImage(lr)) lr = 0;  // walk found no app caller
+          // No app caller: keep the deepest system return address, which the
+          // image list in the CSV header maps to a library.
+          if (!InImage(pc) && !InImage(lr)) lr = deepest;
           else if (InImage(pc)) lr = pc;
           pc = 0;
         }
@@ -520,7 +546,7 @@ extern "C" int rex_pc_profile_write_csv(const char* path) {
   if (!file)
     return -1;
   std::fprintf(file,
-               "# pc-profile v4: interval_us=%u slice_s=10 samples=%llu dropped=%llu "
+               "# pc-profile v5: interval_us=%u slice_s=10 samples=%llu dropped=%llu "
                "image_base=0x%llx; roles 1=guest 2=main guest 4=native renderer 8=frame "
                "producer 16=audio; pc 0x0 = waiting; lr = first caller inside the app (for pc 0, the app function waited in)\n",
                profile::kIntervalUs, (unsigned long long)total, (unsigned long long)dropped,
@@ -533,6 +559,15 @@ extern "C" int rex_pc_profile_write_csv(const char* path) {
                    (unsigned long long)ring_ids[i].load(std::memory_order_relaxed),
                    ring_roles[i].load(std::memory_order_relaxed),
                    ring_entries[i].load(std::memory_order_relaxed));
+  // Loaded images, so addresses outside the app can be named.
+  for (uint32_t i = 0, count = _dyld_image_count(); i < count; ++i) {
+    const mach_header* header = _dyld_get_image_header(i);
+    const char* name = _dyld_get_image_name(i);
+    const char* leaf = name ? std::strrchr(name, '/') : nullptr;
+    std::fprintf(file, "# image base=0x%llx size=0x%llx name=%s\n",
+                 (unsigned long long)(uintptr_t)header, (unsigned long long)ImageTextSize(header),
+                 leaf ? leaf + 1 : (name ? name : "?"));
+  }
   std::fprintf(file, "slot,slice,pc,lr,count\n");
   for (const auto& [key, count] : rows)
     std::fprintf(file, "%u,%u,0x%llx,0x%llx,%llu\n", key.slot, key.slice,
