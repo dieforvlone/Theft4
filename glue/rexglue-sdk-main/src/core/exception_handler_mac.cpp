@@ -40,7 +40,7 @@
 #include <fcntl.h>
 #include <mach/mach_time.h>
 #include <mach-o/dyld.h>
-#include <dlfcn.h>
+#include <mach-o/loader.h>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -220,13 +220,31 @@ extern "C" int RexSetFaultDiagnosticFileDescriptor(int fd) {
     return -1;
   }
   // Slide of the image holding this code: under a host app (for example
-  // LiveContainer) Theft4 is a library and image 0 is the host.
+  // LiveContainer) Theft4 is a library and image 0 is the host. (dladdr is
+  // hidden by this file's _XOPEN_SOURCE, so scan each image's __TEXT.)
   intptr_t slide = _dyld_get_image_vmaddr_slide(0);
-  Dl_info info{};
-  if (dladdr(reinterpret_cast<const void*>(&RexSetFaultDiagnosticFileDescriptor), &info) &&
-      info.dli_fbase) {
-    for (uint32_t i = 0, n = _dyld_image_count(); i < n; ++i)
-      if (_dyld_get_image_header(i) == info.dli_fbase) { slide = _dyld_get_image_vmaddr_slide(i); break; }
+  const uintptr_t self = reinterpret_cast<uintptr_t>(&RexSetFaultDiagnosticFileDescriptor);
+  for (uint32_t i = 0, n = _dyld_image_count(); i < n; ++i) {
+    const auto* header = reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(i));
+    if (!header || header->magic != MH_MAGIC_64) continue;
+    const auto* command = reinterpret_cast<const load_command*>(header + 1);
+    uint64_t text_size = 0;
+    for (uint32_t c = 0; c < header->ncmds; ++c) {
+      if (command->cmd == LC_SEGMENT_64) {
+        const auto* segment = reinterpret_cast<const segment_command_64*>(command);
+        if (!std::strncmp(segment->segname, SEG_TEXT, sizeof(segment->segname))) {
+          text_size = segment->vmsize;
+          break;
+        }
+      }
+      command = reinterpret_cast<const load_command*>(
+          reinterpret_cast<const uint8_t*>(command) + command->cmdsize);
+    }
+    const uintptr_t base = reinterpret_cast<uintptr_t>(header);
+    if (self >= base && self < base + text_size) {
+      slide = _dyld_get_image_vmaddr_slide(i);
+      break;
+    }
   }
   fault_image_slide.store(static_cast<uint64_t>(slide), std::memory_order_relaxed);
   fault_timebase_numer.store(timebase.numer, std::memory_order_relaxed);
