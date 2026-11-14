@@ -2242,7 +2242,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     [self applyHeatGuard];
 }
 
-// Shortens draw and shadow distance while the phone is serious or critical,
+// Shortens draw and shadow distance as the phone warms (fair, serious, critical),
 // and restores the launch settings once it cools. No effect before Play.
 - (void)applyHeatGuard {
 #if defined(THEFT4_HAS_GAME_LOADER) && defined(THEFT4_HAS_GAME_STARTUP)

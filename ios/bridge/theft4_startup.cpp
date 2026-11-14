@@ -95,14 +95,28 @@ extern "C" void theft4_heat_guard_apply(int thermal_state) {
 #ifdef THEFT4_HAS_GTA4_NATIVE_BACKEND
   const double draw = heat_guard_draw_distance.load(), shadow = heat_guard_shadow_distance.load();
   if (draw <= 0.0 || shadow <= 0.0) return;
-  // 0 = launch settings, 1 = serious, 2 = critical.
-  const int level = thermal_state >= 3 ? 2 : thermal_state >= 2 ? 1 : 0;
+  // 0 = launch settings, 1 = fair, 2 = serious, 3 = critical. On device the
+  // CPU already runs about 1.6x slower while iOS still reports "fair", so the
+  // first, light step starts there instead of waiting for "serious".
+  const int wanted = std::clamp(thermal_state, 0, 3);
+  // Called every 5 s. Step down at once when warmer; step back up only after
+  // 30 s at a cooler state, so the view distance does not flicker between
+  // fair and nominal.
+  static int cooler_checks = 0;
+  const int current = heat_guard_level.load();
+  int level = wanted;
+  if (current >= 0 && wanted < current) {
+    if (++cooler_checks < 6) return;
+    level = current - 1;
+  }
+  cooler_checks = 0;
   if (heat_guard_level.exchange(level) == level) return;
-  const double draw_factor = level == 2 ? 0.6 : level == 1 ? 0.75 : 1.0;
-  const double shadow_factor = level == 2 ? 0.5 : level == 1 ? 0.75 : 1.0;
-  // Never go below the launcher's Optimized draw distance (0.70x) at serious.
-  const double draw_scale = level == 0 ? draw : std::min(draw, std::max(draw * draw_factor, level == 2 ? 0.5 : 0.70));
-  const double shadow_scale = shadow * shadow_factor;
+  static constexpr double kDrawFactor[] = {1.0, 0.85, 0.75, 0.6};
+  static constexpr double kShadowFactor[] = {1.0, 0.85, 0.75, 0.5};
+  // Never go below the launcher's Optimized draw distance (0.70x) before critical.
+  const double draw_scale = level == 0 ? draw
+      : std::min(draw, std::max(draw * kDrawFactor[level], level == 3 ? 0.5 : 0.70));
+  const double shadow_scale = shadow * kShadowFactor[level];
   REXCVAR_SET(gta4_draw_distance_scale, draw_scale);
   REXCVAR_SET(gta4_shadow_distance_scale, shadow_scale);
   REXLOG_WARN("Theft4 heat guard: thermal={} level={} draw-distance={:.2f} shadow-distance={:.2f}",
